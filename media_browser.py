@@ -53,7 +53,7 @@ SEARCH_FONT_DIRS = [
 @dataclass(slots=True)
 class AppState:
     cache_dir: Path
-    transcode_dir: Path
+    hls_dir: Path
     root_dirs: List[Path]
     virtual_map: Dict[str, Path]
     font_file: object = None
@@ -73,7 +73,7 @@ def parse_args():
     parser.add_argument(
         "--cache-dir",
         default=None,
-        help="Directory to store cached thumbnails and transcoded video (default: XDG cache)"
+        help="Directory to store cached thumbnails and videos (default: XDG cache)"
     )
     parser.add_argument(
         "directories",
@@ -88,7 +88,7 @@ def parse_args():
     else:
         cache_dir = Path(os.path.abspath(args.cache_dir))
 
-    transcode_dir = cache_dir / "transcode"
+    hls_dir = cache_dir / "hls"
 
     root_dirs = [Path(d).resolve() for d in args.directories]
     for d in root_dirs:
@@ -97,7 +97,7 @@ def parse_args():
 
     appstate = AppState(
         cache_dir=cache_dir,
-        transcode_dir=transcode_dir,
+        hls_dir=hls_dir,
         root_dirs=root_dirs,
         virtual_map={}
     )
@@ -338,19 +338,22 @@ def ensure_thumb(appstate: AppState, src: Path) -> tuple[Path, str]:
 # ---------------- Video formats ----------------
 
 @dataclass(slots=True)
+class StreamInfo:
+    codec: str
+    index: int              # ffmpeg stream index
+
+@dataclass(slots=True)
 class VideoInfo:
-    # all strings lowercase
-    # one or both of video_codec, audio_codec must be present
     ext: str
-    video_codec: Optional[str]
-    audio_codec: Optional[str]
+    video: List[StreamInfo]
+    audio: List[StreamInfo]
 
 def get_video_info(src: Path) -> Optional[VideoInfo]:
     cmd = [
         "ffprobe", "-v", "error",
-        "-show_entries", "stream=codec_type,codec_name",
+        "-show_entries", "stream=index,codec_type,codec_name",
         "-of", "json",
-        str(src)
+        str(src),
     ]
     try:
         out = subprocess.check_output(cmd)
@@ -359,57 +362,41 @@ def get_video_info(src: Path) -> Optional[VideoInfo]:
         return None
 
     ext = src.suffix.lstrip(".").lower()
-    video_codec = None
-    audio_codec = None
+    video = []
+    audio = []
 
-    # TODO: this only picks out the first video/audio stream
-    # Sometimes there are multiple audio streams of different codecs.
-    for stream in data.get("streams", []):
-        codec_type = stream.get("codec_type")
-        codec_name = stream.get("codec_name")
-        if codec_type == "video" and not video_codec:
-            video_codec = codec_name.lower()
-        elif codec_type == "audio" and not audio_codec:
-            audio_codec = codec_name.lower()
+    for s in data.get("streams", []):
+        ctype = s.get("codec_type")
+        cname = s.get("codec_name")
+        idx = s.get("index")
 
-    if video_codec or audio_codec:
-        return VideoInfo(ext, video_codec, audio_codec)
+        if not cname or idx is None:
+            continue
+
+        cname = cname.lower()
+
+        if ctype == "video":
+            video.append(StreamInfo(codec=cname, index=idx))
+        elif ctype == "audio":
+            audio.append(StreamInfo(codec=cname, index=idx))
+
+    if video or audio:
+        return VideoInfo(ext=ext, video=video, audio=audio)
 
     return None
 
-def expect_browser_native_playback(info: VideoInfo) -> bool:
-    # Define allowed codecs per container - maybe not necessary
-    container_video_codecs = {
-        "mp4": {"h264", "avc1"},
-        "m4v": {"h264", "avc1"},
-        #"mov": {"h264", "avc1"},   seems bad in chromium
-        "webm": {"vp8", "vp9", "av1"},
-        "ogg": {"theora"},
-        "ogv": {"theora"},
-        "mkv": {"h264", "avc1", "vp8", "vp9", "av1"},
-    }
+# suitable for HLS
+HLS_VIDEO_COPY_CODECS = {"h264", "avc1"}
+HLS_AUDIO_COPY_CODECS = {"aac", "mp3"}
 
-    container_audio_codecs = {
-        "mp4": {"aac", "mp3"},
-        "m4v": {"aac", "mp3"},
-        #"mov": {"aac", "mp3"},
-        "webm": {"vorbis", "opus"},
-        "ogg": {"vorbis"},
-        "ogv": {"vorbis"},
-        "mkv": {"aac", "mp3", "vorbis", "opus"},
-    }
+def choose_stream(streams: list[StreamInfo],
+                  preferred_codecs: set[str]) -> Optional[StreamInfo]:
+    for s in streams:
+        if s.codec in preferred_codecs:
+            return s
+    return streams[0] if streams else None
 
-    ext = info.ext
-    if ext not in container_video_codecs: # same as container_audio_codecs
-        return False
-
-    vc = info.video_codec
-    ac = info.audio_codec
-    v_ok = vc is None or vc in container_video_codecs.get(ext, set())
-    a_ok = ac is None or ac in container_audio_codecs.get(ext, set())
-    return v_ok and a_ok
-
-# ---------------- Transcoding ----------------
+# ---------------- HLS ----------------
 
 @dataclass(slots=True)
 class HLSJob:
@@ -422,34 +409,64 @@ hls_jobs: dict[str, HLSJob] = {}
 hls_jobs_lock = threading.Lock()
 HLS_IDLE_TIMEOUT = 30   # seconds
 
-def start_hls_ffmpeg_process(src: Path, outdir: Path) -> subprocess.Popen:
-    """Start an HLS transcode to outdir."""
+def start_hls_ffmpeg_process(src: Path,
+                             outdir: Path,
+                             info: VideoInfo) -> subprocess.Popen:
+    """Start producing a HLS stream to outdir."""
     outdir.mkdir(parents=True, exist_ok=True)
 
+    video = choose_stream(info.video, HLS_VIDEO_COPY_CODECS)
+    audio = choose_stream(info.audio, HLS_AUDIO_COPY_CODECS)
+
     cmd = [
-        "ffmpeg", "-loglevel", "error",
-        "-y",                       # overwrite output
-        "-i", str(src),             # input file
+        "ffmpeg", "-loglevel", "error", "-y",
+        "-i", str(src),
+    ]
 
-        "-map", "0:v?",             # optional first video stream
-        "-map", "0:a?",             # optional first audio stream
+    if video:
+        cmd += ["-map", f"0:{video.index}"]
+    if audio:
+        cmd += ["-map", f"0:{audio.index}"]
 
-        "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-                                    # force even dimensions for libx264
-        "-c:v", "libx264",          # H.264 video
-        "-preset", "veryfast",      # veryfast encoding
-        "-g", "48",                 # GOP size (keyframe interval) in frames
-        "-keyint_min", "48",        # minimum keyframe interval
-        "-sc_threshold", "0",       # disable scene cut detection
-        #"-profile:v", "baseline",  # optional: device compatibility
+    msg = "ffmpeg: "
 
-        "-c:a", "aac",              # AAC codec
-        "-b:a", "128k",             # bitrate
+    if video and video.codec in HLS_VIDEO_COPY_CODECS:
+        msg += f"copy video ({video.codec})"
+        cmd += ["-c:v", "copy"]
+    elif video:
+        msg += f"re-encode video ({video.codec})"
+        cmd += [
+            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                                        # force even dimensions for libx264
+            "-c:v", "libx264",          # H.264 video
+            "-preset", "veryfast",      # veryfast encoding
+            "-g", "48",                 # GOP size (keyframe interval) in frames
+            "-keyint_min", "48",        # minimum keyframe interval
+            "-sc_threshold", "0",       # disable scene cut detection
+            #"-profile:v", "baseline",  # optional: device compatibility
+        ]
+    else:
+        msg += "no video stream"
 
+    if audio and audio.codec in HLS_AUDIO_COPY_CODECS:
+        msg += f", copy audio ({audio.codec})"
+        cmd += ["-c:a", "copy"]
+    elif audio:
+        msg += f", re-encode audio ({audio.codec})"
+        cmd += [
+            "-c:a", "aac",
+            "-b:a", "128k"
+        ]
+    else:
+        msg += ", no audio"
+
+    logger.info(msg)
+
+    cmd += [
         "-f", "hls",                # HLS format
-        "-hls_time", "10",          # segment duration in seconds
+        "-hls_time", "5",           # segment duration in seconds
         "-hls_list_size", "0",      # keep all segments in playlist
-        "-hls_segment_filename", str(outdir / "seg%03d.ts"), # segment filenames
+        "-hls_segment_filename", str(outdir / "seg%03d.ts"),
         str(outdir / "index.m3u8"), # playlist output
     ]
 
@@ -457,10 +474,12 @@ def start_hls_ffmpeg_process(src: Path, outdir: Path) -> subprocess.Popen:
 
 def start_or_reuse_hls_job(src: Path,
                            key: str,
-                           out_dir: Path) -> tuple[HLSJob, bool]:
+                           out_dir: Path,
+                           info: VideoInfo) -> tuple[HLSJob, bool]:
     """
-    Ensure an HLS transcode exists or is running.
+    Ensure an HLS job exists or is running.
     """
+    playlist_path = out_dir / "index.m3u8"
     incomplete_marker = out_dir / "incomplete"
     complete_marker = out_dir / "complete"
     error_marker = out_dir / "error"
@@ -473,9 +492,16 @@ def start_or_reuse_hls_job(src: Path,
             return (job, False)
 
         # No job yet - start ffmpeg
-        out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            out_dir.mkdir(parents=True)
+        except FileExistsError:
+            # Delete an old playlist to prevent clients buffering up existing
+            # segments, and not needing to make requests for a long time.
+            # If that happens, we may kill the ffmpeg process by the time the
+            # client wants to get the next segments.
+            playlist_path.unlink(missing_ok=True)
         incomplete_marker.touch()
-        proc = start_hls_ffmpeg_process(src, out_dir)
+        proc = start_hls_ffmpeg_process(src, out_dir, info)
 
         job = HLSJob(
             proc=proc,
@@ -625,17 +651,12 @@ def start_hls(request: Request, path: OsPath) -> dict:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
     # Get video/audio info
-    # TODO: reject still images
     info = get_video_info(src)
     if not info:
         return {"error": "Not a video or audio file"}
 
-    # Reject files expected to be playable natively
-    if expect_browser_native_playback(info):
-        return {"error": "File expected to be playable in browser"}
-
     key = hash_path(src)
-    out_dir = appstate.transcode_dir / key
+    out_dir = appstate.hls_dir / key
     complete_marker = out_dir / "complete"
     error_marker = out_dir / "error"
     playlist_path = out_dir / "index.m3u8"
@@ -651,14 +672,14 @@ def start_hls(request: Request, path: OsPath) -> dict:
 
     # Start or reuse HLS job
     try:
-        job, new_job = start_or_reuse_hls_job(src, key, out_dir)
+        job, new_job = start_or_reuse_hls_job(src, key, out_dir, info)
         if new_job:
             logger.info(f"Job {key} - new ffmpeg process")
         else:
             logger.info(f"Job {key} - existing ffmpeg process")
     except Exception as e:
         logger.exception(f"Failed to start HLS job for {src}: {e}")
-        return {"error": "Error starting transcoding job"}
+        return {"error": "Error starting HLS job"}
 
     # Wait a short time for the playlist to appear
     ready = wait_for_file_ready(playlist_path, timeout=10, interval=0.2)
@@ -670,7 +691,7 @@ def start_hls(request: Request, path: OsPath) -> dict:
 @app.get("/hls/{key}/index.m3u8")
 def hls_playlist(request: Request, key: str):
     appstate = request.app.state.appstate
-    path = appstate.transcode_dir / key / "index.m3u8"
+    path = appstate.hls_dir / key / "index.m3u8"
     if path.is_file():
         bump_hls_job_time(key)
         return FileResponse(path, media_type="application/vnd.apple.mpegurl")
@@ -681,7 +702,7 @@ def hls_playlist(request: Request, key: str):
 def hls_segment(request: Request, key: str, segment: str):
     appstate = request.app.state.appstate
     bump_hls_job_time(key)  # even if segment not ready yet
-    path = appstate.transcode_dir / key / segment
+    path = appstate.hls_dir / key / segment
     if path.is_file():
         return FileResponse(path, media_type="video/MP2T")
     else:

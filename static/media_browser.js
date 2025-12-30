@@ -771,27 +771,27 @@ async function showVideoItem(item) {
       return;
     }
 
-    let transcodeStarted = false;
+    let hlsStarted = false;
     if (viewerVideo.canPlayType("application/vnd.apple.mpegurl")) {
       viewerVideo.src = data.playlist;
       await viewerVideo.play();
-      transcodeStarted = true;
+      hlsStarted = true;
     } else if (window.Hls && window.Hls.isSupported()) {
       currentHls = new Hls();
       currentHls.loadSource(data.playlist);
       currentHls.attachMedia(viewerVideo);
       currentHls.on(Hls.Events.MANIFEST_PARSED, () => viewerVideo.play());
-      transcodeStarted = true;
+      hlsStarted = true;
     } else {
       showToast("Hls.js not loaded, cannot play HLS video", 3000);
     }
 
-    if (transcodeStarted) {
-      showToast("Transcoding video");
+    if (hlsStarted) {
+      showToast("HLS playback");
     }
   } catch (e) {
-    console.error("Failed to start HLS transcode", e);
-    showToast("Failed to start HLS transcode: " + e.message, 3000);
+    console.error("Failed to start HLS stream", e);
+    showToast("Failed to start HLS stream: " + e.message, 3000);
   }
 }
 
