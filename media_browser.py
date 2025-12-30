@@ -1,0 +1,722 @@
+from dataclasses import dataclass
+from typing import Dict, List, Set, Optional, NewType
+
+import argparse
+import hashlib
+import json
+import logging
+import mimetypes
+import os
+import socket
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+import uvicorn
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from PIL import Image, ImageOps
+
+# ---------------- Globals ----------------
+
+BASE_DIR: Path = Path(__file__).resolve().parent
+logger = logging.getLogger("uvicorn.error")
+
+IMAGE_EXTS: Set[str] = {
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp", ".ico"
+}
+VIDEO_EXTS: Set[str] = {
+    # Common web/desktop video formats
+    ".mp4", ".m4v", ".mov", ".webm", ".ogv", ".ogg", ".mkv",
+    ".flv",
+    ".avi", ".wmv",
+    ".mpeg", ".mpg", ".ts", ".m2ts", ".m2v",
+    ".vob",
+    # Mobile /legacy
+    ".3gp",
+    # Flash / streaming formats
+    ".swf", ".asf", ".ra", ".ram", ".rm"
+}
+THUMB_SIZE = (320, 320)
+
+SEARCH_FONT_DIRS = [
+    Path.home() / ".local/share/fonts",
+    Path("/usr/share/fonts"),
+    Path("/usr/local/share/fonts"),
+]
+
+# ---------------- CLI ----------------
+
+@dataclass(slots=True)
+class AppState:
+    cache_dir: Path
+    transcode_dir: Path
+    root_dirs: List[Path]
+    virtual_map: Dict[str, Path]
+    font_file: object = None
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Simple local media browser (images & videos)"
+    )
+    parser.add_argument(
+        "--bind", default="0.0.0.0",
+        help="IP address to bind to (default: 0.0.0.0)"
+    )
+    parser.add_argument(
+        "--port", type=int, default=7000,
+        help="Port to listen on (default: 7000)"
+    )
+    parser.add_argument(
+        "--cache-dir",
+        default=None,
+        help="Directory to store cached thumbnails and transcoded video (default: XDG cache)"
+    )
+    parser.add_argument(
+        "directories",
+        nargs="+",  # one or more
+        help="Directories to serve as roots"
+    )
+    args = parser.parse_args()
+
+    if args.cache_dir is None:
+        cache_dir = get_default_cache_dir() / "media_browser_cache"
+        print(f"Using default directory: {cache_dir}")
+    else:
+        cache_dir = Path(os.path.abspath(args.cache_dir))
+
+    transcode_dir = cache_dir / "transcode"
+
+    root_dirs = [Path(d).resolve() for d in args.directories]
+    for d in root_dirs:
+        if not d.is_dir():
+            sys.exit(f"Not a directory: {d}")
+
+    appstate = AppState(
+        cache_dir=cache_dir,
+        transcode_dir=transcode_dir,
+        root_dirs=root_dirs,
+        virtual_map={}
+    )
+
+    return args, appstate
+
+def get_default_cache_dir() -> Path:
+    if sys.platform.startswith("win"):
+        return Path(os.getenv("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    elif sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches"
+    else:  # Linux / Unix
+        return Path(os.getenv("XDG_CACHE_HOME", Path.home() / ".cache"))
+
+# ---------------- Path encoding ----------------
+
+OSPATH_PREFIX = "~~OSPATH~~"
+
+OsPath = NewType("OsPath", str)
+
+def encode_ospath(s: str) -> OsPath:
+    try:
+        s.encode("utf-8")
+        return OsPath(s)
+    except UnicodeEncodeError:
+        pass
+
+    b = s.encode("utf-8", errors="surrogateescape")
+    encoded = "".join(
+        "~7E" if byte == 0x7E else
+        chr(byte) if byte < 0x80 else
+        f"~{byte:02X}"
+        for byte in b
+    )
+    return OsPath(OSPATH_PREFIX + encoded)
+
+def decode_ospath(ospath: OsPath) -> str:
+    s = str(ospath)
+    if not s.startswith(OSPATH_PREFIX):
+        return s
+
+    s = s[len(OSPATH_PREFIX):]
+    out = bytearray()
+    i = 0
+    length = len(s)
+
+    while i < length:
+        c = s[i]
+        if c == "~":
+            if i + 2 >= length:
+                raise ValueError(f"Incomplete escape sequence at position {i}: {s[i:]}")
+            hex_part = s[i + 1:i + 3]
+            try:
+                out.append(int(hex_part, 16))
+            except ValueError:
+                raise ValueError(f"Invalid hex in escape sequence at position {i}: {hex_part}")
+            i += 3
+        else:
+            # encode a consecutive run of non-tilde characters in one go
+            start = i
+            while i < length and s[i] != "~":
+                i += 1
+            out.extend(s[start:i].encode("utf-8", errors="surrogateescape"))
+
+    return out.decode("utf-8", errors="surrogateescape")
+
+# ---------------- Virtual path mapping ----------------
+
+@dataclass(slots=True)
+class TreeNode:
+    name: OsPath
+    path: OsPath
+    dirs: List["TreeNode"]
+
+def build_virtual_map(state: AppState):
+    for root in state.root_dirs:
+        key = encode_ospath(root.name)
+        if key in state.virtual_map:
+            sys.exit(f"Duplicate directory names not allowed: {root.name}")
+        state.virtual_map[key] = root
+
+def build_trees(appstate: AppState) -> List[TreeNode]:
+    def walk(p: Path, virtual_prefix: str):
+        node = TreeNode(
+            name=encode_ospath(p.name),
+            path=encode_ospath(virtual_prefix),
+            dirs=[]
+            )
+        for d in sorted(p.iterdir()):
+            if d.is_dir() and not d.name.startswith("."):
+                node.dirs.append(walk(d, f"{virtual_prefix}/{d.name}"))
+        return node
+
+    trees = [
+        walk(path, name)
+        for name, path in appstate.virtual_map.items()
+    ]
+    return trees
+
+def safe_path(appstate: AppState, virtual_path: OsPath) -> Path:
+    """
+    Resolve virtual path (<root>/<subdir>/...) to real filesystem path,
+    with basic safety checks.
+    """
+    try:
+        vp = decode_ospath(virtual_path)
+
+        # First segment must be a known root
+        root, *rest = vp.split("/", 1)
+        base = appstate.virtual_map[root]
+
+        # Resolve the remainder (if any)
+        if not rest:
+            candidate = base
+        else:
+            candidate = (base / rest[0]).resolve()
+
+        # Ensure the resolved path stays within the root
+        candidate.relative_to(base)
+
+        return candidate
+
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail=f"Invalid path: {virtual_path}")
+
+# ---------------- Thumbnails ----------------
+
+def is_image(p: Path):
+    return p.suffix.lower() in IMAGE_EXTS
+
+def is_video(p: Path):
+    return p.suffix.lower() in VIDEO_EXTS
+
+def hash_path(path: Path) -> str:
+    # This also handles non-utf-8 paths.
+    return hashlib.sha256(bytes(path)).hexdigest()
+
+def thumb_path(appstate: AppState, src: Path) -> Path:
+    h = hash_path(src)
+    return appstate.cache_dir / f"{h[:2]}/{h[2:]}.jpg"
+
+def find_font(font_name: str) -> Optional[Path]:
+    for base_dir in SEARCH_FONT_DIRS:
+        if not base_dir.is_dir():
+            continue
+        for path in base_dir.rglob(font_name):
+            if path.is_file():
+                return path
+    return None
+
+def gen_image_thumb(src: Path, dst: Path) -> bool:
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        with Image.open(src) as im:
+            im = ImageOps.exif_transpose(im)
+            im.thumbnail(THUMB_SIZE)
+            im.convert("RGB").save(dst, "JPEG", quality=85)
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to generate thumbnail for {src}: {e}")
+        return False
+
+def gen_video_thumb(appstate: AppState, src: Path, dst: Path) -> bool:
+    """Generate a video thumbnail with duration overlay."""
+    # First, get the video duration
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error",
+             "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1",
+             str(src)],
+            capture_output=True, text=True, check=True
+        )
+        sec = float(result.stdout.strip())
+        h,m,s = int(sec//3600), int((sec%3600)//60), int(sec%60)
+        if h > 0:
+            duration = f"{h}\\:{m:02d}\\:{s:02d}"
+        else:
+            duration = f"{m:02d}\\:{s:02d}"
+    except Exception:
+        duration = ""
+
+    # Search for font file only once.
+    if duration and appstate.font_file is None:
+        appstate.font_file = find_font("DejaVuSans.ttf") or ""
+    font_file = appstate.font_file
+
+    filters = [f"thumbnail,scale={THUMB_SIZE[0]}:-1"]
+    if duration:
+        dt = f"drawtext=text='{duration}':x=w-tw-8:y=8"
+        dt += ":box=1:boxborderw=8:boxcolor=0x000000aa"
+        dt += ":fontsize=24:fontcolor=0xcccccc"
+        if font_file:
+            dt += f":fontfile='{font_file}'"
+        filters.append(dt)
+    vf = ",".join(filters)
+
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error",
+             "-i", str(src),
+             "-frames:v", "1",
+             "-vf", vf,
+             str(dst)],
+            check=False
+        )
+        return dst.exists()
+    except Exception:
+        logger.warning(f"Failed to generate thumbnail for {src}")
+        return False
+
+def ensure_thumb(appstate: AppState, src: Path) -> tuple[Path, str]:
+    dst = thumb_path(appstate, src)
+    if dst.exists():
+        if dst.stat().st_size > 0:
+            return (dst, "ok")
+        else:
+            return (dst, "error")
+
+    if not src.is_file():
+        return (dst, "src_not_found")
+
+    # Generate new thumbnail.
+    generated = False
+    if is_image(src):
+        generated = gen_image_thumb(src, dst)
+    elif is_video(src):
+        generated = gen_video_thumb(appstate, src, dst)
+    if generated:
+        return (dst, "ok")
+    # Leave an empty thumbnail to indicate error.
+    with open(dst, "wb") as f:
+        f.write(b"")
+    return (dst, "error")
+
+# ---------------- Video formats ----------------
+
+@dataclass(slots=True)
+class VideoInfo:
+    # all strings lowercase
+    # one or both of video_codec, audio_codec must be present
+    ext: str
+    video_codec: Optional[str]
+    audio_codec: Optional[str]
+
+def get_video_info(src: Path) -> Optional[VideoInfo]:
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "stream=codec_type,codec_name",
+        "-of", "json",
+        str(src)
+    ]
+    try:
+        out = subprocess.check_output(cmd)
+        data = json.loads(out)
+    except Exception:
+        return None
+
+    ext = src.suffix.lstrip(".").lower()
+    video_codec = None
+    audio_codec = None
+
+    # TODO: this only picks out the first video/audio stream
+    # Sometimes there are multiple audio streams of different codecs.
+    for stream in data.get("streams", []):
+        codec_type = stream.get("codec_type")
+        codec_name = stream.get("codec_name")
+        if codec_type == "video" and not video_codec:
+            video_codec = codec_name.lower()
+        elif codec_type == "audio" and not audio_codec:
+            audio_codec = codec_name.lower()
+
+    if video_codec or audio_codec:
+        return VideoInfo(ext, video_codec, audio_codec)
+
+    return None
+
+def expect_browser_native_playback(info: VideoInfo) -> bool:
+    # Define allowed codecs per container - maybe not necessary
+    container_video_codecs = {
+        "mp4": {"h264", "avc1"},
+        "m4v": {"h264", "avc1"},
+        #"mov": {"h264", "avc1"},   seems bad in chromium
+        "webm": {"vp8", "vp9", "av1"},
+        "ogg": {"theora"},
+        "ogv": {"theora"},
+        "mkv": {"h264", "avc1", "vp8", "vp9", "av1"},
+    }
+
+    container_audio_codecs = {
+        "mp4": {"aac", "mp3"},
+        "m4v": {"aac", "mp3"},
+        #"mov": {"aac", "mp3"},
+        "webm": {"vorbis", "opus"},
+        "ogg": {"vorbis"},
+        "ogv": {"vorbis"},
+        "mkv": {"aac", "mp3", "vorbis", "opus"},
+    }
+
+    ext = info.ext
+    if ext not in container_video_codecs: # same as container_audio_codecs
+        return False
+
+    vc = info.video_codec
+    ac = info.audio_codec
+    v_ok = vc is None or vc in container_video_codecs.get(ext, set())
+    a_ok = ac is None or ac in container_audio_codecs.get(ext, set())
+    return v_ok and a_ok
+
+# ---------------- Transcoding ----------------
+
+@dataclass(slots=True)
+class HLSJob:
+    proc: subprocess.Popen  # ffmpeg
+    out_dir: Path
+    last_access: float
+    waited: bool = False
+
+hls_jobs: dict[str, HLSJob] = {}
+hls_jobs_lock = threading.Lock()
+HLS_IDLE_TIMEOUT = 30   # seconds
+
+def start_hls_ffmpeg_process(src: Path, outdir: Path) -> subprocess.Popen:
+    """Start an HLS transcode to outdir."""
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        "ffmpeg", "-loglevel", "error",
+        "-y",                       # overwrite output
+        "-i", str(src),             # input file
+
+        "-map", "0:v?",             # optional first video stream
+        "-map", "0:a?",             # optional first audio stream
+
+        "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                                    # force even dimensions for libx264
+        "-c:v", "libx264",          # H.264 video
+        "-preset", "veryfast",      # veryfast encoding
+        "-g", "48",                 # GOP size (keyframe interval) in frames
+        "-keyint_min", "48",        # minimum keyframe interval
+        "-sc_threshold", "0",       # disable scene cut detection
+        #"-profile:v", "baseline",  # optional: device compatibility
+
+        "-c:a", "aac",              # AAC codec
+        "-b:a", "128k",             # bitrate
+
+        "-f", "hls",                # HLS format
+        "-hls_time", "10",          # segment duration in seconds
+        "-hls_list_size", "0",      # keep all segments in playlist
+        "-hls_segment_filename", str(outdir / "seg%03d.ts"), # segment filenames
+        str(outdir / "index.m3u8"), # playlist output
+    ]
+
+    return subprocess.Popen(cmd)
+
+def start_or_reuse_hls_job(src: Path,
+                           key: str,
+                           out_dir: Path) -> tuple[HLSJob, bool]:
+    """
+    Ensure an HLS transcode exists or is running.
+    """
+    incomplete_marker = out_dir / "incomplete"
+    complete_marker = out_dir / "complete"
+    error_marker = out_dir / "error"
+
+    with hls_jobs_lock:
+        # Reuse existing running job
+        job = hls_jobs.get(key)
+        if job is not None:
+            job.last_access = time.time()
+            return (job, False)
+
+        # No job yet - start ffmpeg
+        out_dir.mkdir(parents=True, exist_ok=True)
+        incomplete_marker.touch()
+        proc = start_hls_ffmpeg_process(src, out_dir)
+
+        job = HLSJob(
+            proc=proc,
+            out_dir=out_dir,
+            last_access=time.time(),
+        )
+        hls_jobs[key] = job
+
+    # on_finish runs in a thread.
+    def on_finish():
+        try:
+            job.proc.wait()
+        except Exception as e:
+            logger.warning(f"Exception while waiting for ffmpeg: {e}")
+
+        with hls_jobs_lock:
+            # Just in case, don't bother to wait again if idle
+            # and don't keep bumping the last_access time.
+            # Let hls_reaper remove the job after idle.
+            job.waited = True
+
+        rc = job.proc.returncode
+        if rc == 0:
+            logger.info(f"Job {key} - marking as complete")
+            incomplete_marker.rename(complete_marker)
+        elif rc < 0:
+            logger.info(f"Job {key} - ffmpeg killed by signal {-rc}")
+        elif rc == 255:
+            pass    # server killed, not ffmpeg error
+        else:
+            logger.info(f"Job {key} - marking as error, ffmpeg exit code {rc}")
+            error_marker.touch()
+
+    thread = threading.Thread(target=on_finish, daemon=True)
+    thread.start()
+    return (job, True)  # new job
+
+def bump_hls_job_time(key: str):
+    with hls_jobs_lock:
+        job = hls_jobs.get(key)
+        if job and not job.waited:
+            # logger.info(f"Job {key} - last_access {job.last_access}")
+            job.last_access = time.time()
+
+def hls_reaper():
+    """
+    Kill ffmpeg for idle jobs and remove them from memory immediately.
+    """
+    while True:
+        time.sleep(5)
+        now = time.time()
+        with hls_jobs_lock:
+            for key, job in list(hls_jobs.items()):
+                idle_time = now - job.last_access
+                # logger.info(f"Job {key} - idle time: {idle_time}")
+                if idle_time > HLS_IDLE_TIMEOUT:
+                    try:
+                        if job.waited:
+                            logger.info(f"Job {key} - idle, already waited")
+                        else:
+                            logger.info(f"Job {key} - idle, killing ffmpeg process")
+                            job.proc.kill()
+                            job.proc.wait(timeout=5)
+                            job.waited = True
+                    except Exception:
+                        pass
+
+                    logger.info(f"Job {key} - removing job")
+                    del hls_jobs[key]
+
+def wait_for_file_ready(path: Path, timeout: float, interval: float) -> bool:
+    """
+    Wait until path exists and is non-empty.
+    Returns True if ready, False on timeout.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if path.stat().st_size > 0:
+                return True
+        except FileNotFoundError:
+            pass
+        time.sleep(interval)
+    return False
+
+# ---------------- API ----------------
+
+app = FastAPI()
+
+app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+
+@app.get("/")
+def index():
+    return FileResponse(BASE_DIR / "static/media_browser.html")
+
+@app.get("/api/tree")
+def tree(request: Request) -> dict:
+    dirs = build_trees(request.app.state.appstate)
+    return {"dirs": dirs}
+
+@app.get("/api/list")
+def list_dir(request: Request, path: OsPath = OsPath("")) -> dict:
+    base = safe_path(request.app.state.appstate, path)
+    files = []
+    for p in base.iterdir():
+        if p.name.startswith("."):
+            continue
+        if is_image(p) or is_video(p):
+            st = p.stat()
+            files.append({
+                "name": encode_ospath(p.name),
+                "type": "video" if is_video(p) else "image",
+                "mtime": st.st_mtime,
+                "size": st.st_size,
+            })
+    return {"files": files}
+
+@app.get("/api/thumb")
+def thumb(request: Request, path: OsPath) -> FileResponse:
+    appstate = request.app.state.appstate
+    src = safe_path(appstate, path)
+    (dst, res) = ensure_thumb(appstate, src)
+    if res == "ok":
+        return FileResponse(dst, media_type="image/jpeg")
+    elif res == "src_not_found":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    else:
+        raise HTTPException(status_code=status.HTTP_410_GONE,
+                            detail="Missing thumbnail")
+
+@app.get("/api/file")
+def file(request: Request, path: OsPath) -> FileResponse:
+    appstate = request.app.state.appstate
+    src = safe_path(appstate, path)
+    if src.is_file():
+        mime, _ = mimetypes.guess_type(src)
+        mime = mime or "application/octet-stream"
+        return FileResponse(src, media_type=mime)
+    else:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+@app.get("/api/start_hls")
+def start_hls(request: Request, path: OsPath) -> dict:
+    appstate = request.app.state.appstate
+    src = safe_path(appstate, path)
+    if not src.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    # Get video/audio info
+    # TODO: reject still images
+    info = get_video_info(src)
+    if not info:
+        return {"error": "Not a video or audio file"}
+
+    # Reject files expected to be playable natively
+    if expect_browser_native_playback(info):
+        return {"error": "File expected to be playable in browser"}
+
+    key = hash_path(src)
+    out_dir = appstate.transcode_dir / key
+    complete_marker = out_dir / "complete"
+    error_marker = out_dir / "error"
+    playlist_path = out_dir / "index.m3u8"
+    playlist_url = f"/hls/{key}/index.m3u8"
+
+    # Check for previous transcode
+    if complete_marker.exists():
+        logger.info(f"Have complete marker for {key}")
+        return {"playlist": playlist_url}
+    if error_marker.exists():
+        logger.info(f"Have error marker for {key}")
+        return {"error": "Transcode unavailable"}
+
+    # Start or reuse HLS job
+    try:
+        job, new_job = start_or_reuse_hls_job(src, key, out_dir)
+        if new_job:
+            logger.info(f"Job {key} - new ffmpeg process")
+        else:
+            logger.info(f"Job {key} - existing ffmpeg process")
+    except Exception as e:
+        logger.exception(f"Failed to start HLS job for {src}: {e}")
+        return {"error": "Error starting transcoding job"}
+
+    # Wait a short time for the playlist to appear
+    ready = wait_for_file_ready(playlist_path, timeout=10, interval=0.2)
+    if not ready:
+        return {"error": "Transcode failed or timed out"}
+
+    return {"playlist": playlist_url}
+
+@app.get("/hls/{key}/index.m3u8")
+def hls_playlist(request: Request, key: str):
+    appstate = request.app.state.appstate
+    path = appstate.transcode_dir / key / "index.m3u8"
+    if path.is_file():
+        bump_hls_job_time(key)
+        return FileResponse(path, media_type="application/vnd.apple.mpegurl")
+    else:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+@app.get("/hls/{key}/{segment}")
+def hls_segment(request: Request, key: str, segment: str):
+    appstate = request.app.state.appstate
+    bump_hls_job_time(key)  # even if segment not ready yet
+    path = appstate.transcode_dir / key / segment
+    if path.is_file():
+        return FileResponse(path, media_type="video/MP2T")
+    else:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+# ---------------- Main ----------------
+
+def local_hostname() -> str:
+    try:
+        name = socket.getfqdn()
+        if name and name != "localhost" and "." in name:
+            return name
+    except Exception:
+        pass
+    return "localhost"
+
+def main():
+    args, appstate = parse_args()
+
+    build_virtual_map(appstate)
+
+    (bind, port) = (args.bind, args.port)
+    if bind in ("0.0.0.0", "::"):
+        url = f"http://{local_hostname()}:{port}"
+    else:
+        url = f"http://{bind}:{port}"
+    print()
+    print(f"Open in browser: {url}")
+    print()
+
+    # Start reaper in background
+    threading.Thread(target=hls_reaper, daemon=True).start()
+
+    app.state.appstate = appstate
+    uvicorn.run(app, host=bind, port=port)
+
+if __name__ == "__main__":
+    main()

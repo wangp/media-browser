@@ -1,0 +1,11 @@
+[project]
+name = "media-browser"
+version = "0.1.0"
+description = "Simple local media browser (images & videos)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.128.0",
+    "pillow>=12.0.0",
+    "uvicorn>=0.40.0",
+]

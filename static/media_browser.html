@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Media Browser</title>
+<link rel="stylesheet" type="text/css" href="/static/style.css" />
+</head>
+<body>
+
+<div id="topbar">
+  <div class="group" id="sortTypeGroup">
+    <button id="setSortNameBtn" data-type="name" class="active">Name</button>
+    <button id="setSortTimeBtn" data-type="mtime">Time</button>
+    <button id="setSortSizeBtn" data-type="size">Size</button>
+  </div>
+  <div class="group">
+    <button id="orderBtn">↑ Ascending</button>
+  </div>
+  <div class="group">
+    <button id="recursiveBtn">Recursive</button>
+    <button id="groupingBtn" class="active">Group</button>
+  </div>
+  <div class="group" id="mediaTypeGroup">
+    <button id="setMediaAllBtn" data-type="all" class="active">All</button>
+    <button id="setMediaImageBtn" data-type="image">Images</button>
+    <button id="setMediaVideoBtn" data-type="video">Videos</button>
+  </div>
+  <div class="group">
+    <button id="showNamesBtn" class="active">Filenames</button>
+  </div>
+  <div class="group">
+    <button id="refreshBtn">⟳ Refresh</button>
+  </div>
+  <div id="breadcrumbDiv"></div>
+  <div class="group right-align">
+    <input id="thumbZoomSlider" type="range" min="100" max="600" value="180">
+    <button id="resetZoomBtn">Reset</button>
+  </div>
+</div>
+
+<div id="main">
+  <div id="tree"></div>
+  <div id="dragbar"></div>
+  <div id="grid"></div>
+</div>
+
+<div id="viewer">
+  <div class="viewer-overlay">
+    <div id="viewerTitle" class="viewer-control"></div>
+    <div class="viewer-buttons viewer-control">
+      <button id="shuffleBtn">⤭</button>
+      <button id="slideBtn">▶</button>
+      <button id="fullscreenBtn">⤢</button>
+      <button id="closeViewerBtn">✕</button>
+    </div>
+
+    <div id="navLeft" class="viewer-nav left viewer-control">
+      <div class="viewer-nav-arrow left">◀</div>
+    </div>
+    <div id="navRight" class="viewer-nav right viewer-control">
+      <div class="viewer-nav-arrow right">▶</div>
+    </div>
+
+    <div id="toast"></div>
+  </div>
+
+  <img id="viewerImg"/>
+  <video id="viewerVideo" autoplay controls playsinline muted></video>
+</div>
+
+<script src="/static/media_browser.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+
+</body>
+</html>
