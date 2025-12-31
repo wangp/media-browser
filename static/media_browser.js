@@ -131,26 +131,45 @@ function basename(p) {
 
 let isDragging = false;
 
-dragbar.addEventListener("mousedown", e => {
+function startDrag(clientX) {
   isDragging = true;
   document.body.style.cursor = "col-resize";
-  e.preventDefault();
-});
+}
 
-document.addEventListener("mousemove", e => {
+function doDrag(clientX) {
   if (isDragging) {
-    let newWidth = e.clientX; // distance from left edge
+    let newWidth = clientX; // distance from left edge
     newWidth = Math.max(150, Math.min(newWidth, window.innerWidth * 0.5));
     tree.style.width = newWidth + "px";
   }
-});
+}
 
-document.addEventListener("mouseup", () => {
+function endDrag() {
   if (isDragging) {
     isDragging = false;
     document.body.style.cursor = "default";
   }
+}
+
+// Mouse events
+dragbar.addEventListener("mousedown", e => {
+  e.preventDefault();
+  startDrag(e.clientX);
 });
+document.addEventListener("mousemove", e => doDrag(e.clientX));
+document.addEventListener("mouseup", endDrag);
+
+// Touch events
+dragbar.addEventListener("touchstart", e => {
+  e.preventDefault();
+  startDrag(e.touches[0].clientX);
+}, { passive: false });
+
+document.addEventListener("touchmove", e => {
+  doDrag(e.touches[0].clientX);
+}, { passive: false });
+
+document.addEventListener("touchend", endDrag);
 
 // ---------------- Tree ----------------
 
