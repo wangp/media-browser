@@ -34,6 +34,8 @@ let slideTimer = null;
 let toastTimer = null;
 
 // UI elements
+const topbar = document.getElementById("topbar");
+const main = document.getElementById("main");
 const tree = document.getElementById("tree");
 const dragbar = document.getElementById("dragbar");
 const grid = document.getElementById("grid");
@@ -1253,6 +1255,18 @@ viewerEl.addEventListener("touchend", e => {
     viewerNav(-1);
   }
 }, { passive: true });
+
+// ---------------- Window ----------------
+
+function resizeMain() {
+  // Prevent mobile browser chrome overlapping our page.
+  const height = window.innerHeight - topbar.offsetHeight;
+  main.style.height = height + 'px';
+}
+
+window.addEventListener('load', resizeMain);
+window.addEventListener('resize', resizeMain);
+window.addEventListener('orientationchange', resizeMain);
 
 // ---------------- Init ----------------
 
