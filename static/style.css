@@ -23,14 +23,17 @@
 
 /* ================= Base ================= */
 
-html,
-body {
-  margin: 0;
+html, body {
   height: 100%;
-  overflow: hidden;
+  margin: 0;
   background: var(--bg-main);
   color: var(--text-main);
   font-family: system-ui, sans-serif;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
 }
 
 /* ================= Topbar ================= */
@@ -38,6 +41,7 @@ body {
 #topbar {
   display: flex;
   flex-wrap: wrap;
+  flex-shrink: 0;
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
@@ -96,7 +100,7 @@ button.active:hover {
 
 #main {
   display: flex;
-  height: calc(100vh - 40px);
+  flex: 1 1 auto;
   overflow: hidden;
 }
 
