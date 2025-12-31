@@ -1217,9 +1217,6 @@ let touchStartX = 0;
 let touchStartY = 0;
 let touchActive = false;
 
-const SWIPE_MIN_X = 50;   // px
-const SWIPE_MAX_Y = 80;   // px (tolerance)
-
 viewerEl.addEventListener("touchstart", e => {
   if (!isViewerActive()) return;
   if (e.touches.length !== 1) return;
@@ -1245,29 +1242,23 @@ viewerEl.addEventListener("touchmove", e => {
   const t = e.touches[0];
   const dx = t.clientX - touchStartX;
   const dy = t.clientY - touchStartY;
-
-  // If vertical movement dominates, cancel swipe
-  if (Math.abs(dy) > Math.abs(dx)) {
-    touchActive = false;
-  }
 }, { passive: true });
 
 viewerEl.addEventListener("touchend", e => {
-  // Hide overlay even if swipe cancelled.
-  clearTimeout(hideTimer);
-  hideTimer = setTimeout(hideViewerControls, 1000);
-
   if (!touchActive) return;
   touchActive = false;
+
+  clearTimeout(hideTimer);
+  hideTimer = setTimeout(hideViewerControls, 1000);
 
   const t = e.changedTouches[0];
   const dx = t.clientX - touchStartX;
   const dy = t.clientY - touchStartY;
 
-  if (Math.abs(dx) < SWIPE_MIN_X) return;
-  if (Math.abs(dy) > SWIPE_MAX_Y) return;
+  // Detect horizontal swipes.
+  if (Math.abs(dx) < 50 || Math.abs(dx) < 2 * Math.abs(dy))
+    return;
 
-  // Swipe direction
   if (dx < 0) {
     viewerNav(1);
   } else {
