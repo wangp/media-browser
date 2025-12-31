@@ -45,24 +45,26 @@
 </div>
 
 <div id="viewer">
-  <div class="viewer-overlay">
-    <div id="viewerTitle" class="viewer-control"></div>
-    <div class="viewer-buttons viewer-control">
+  <div class="viewer-top-bar viewer-control">
+    <div class="viewer-spacer-left"></div>
+    <div id="viewerTitle"></div>
+    <div class="viewer-spacer-right"></div>
+    <div class="viewer-buttons">
       <button id="shuffleBtn">⤭</button>
       <button id="slideBtn">▶</button>
       <button id="fullscreenBtn">⤢</button>
       <button id="closeViewerBtn">✕</button>
     </div>
-
-    <div id="navLeft" class="viewer-nav left viewer-control">
-      <div class="viewer-nav-arrow left">◀</div>
-    </div>
-    <div id="navRight" class="viewer-nav right viewer-control">
-      <div class="viewer-nav-arrow right">▶</div>
-    </div>
-
-    <div id="toast"></div>
   </div>
+
+  <div id="navLeft" class="viewer-nav left viewer-control">
+    <div class="viewer-nav-arrow left">◀</div>
+  </div>
+  <div id="navRight" class="viewer-nav right viewer-control">
+    <div class="viewer-nav-arrow right">▶</div>
+  </div>
+
+  <div id="toast"></div>
 
   <img id="viewerImg"/>
   <video id="viewerVideo" autoplay controls playsinline muted></video>
