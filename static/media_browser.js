@@ -1204,7 +1204,8 @@ viewerEl.addEventListener("touchstart", e => {
   if (e.touches.length !== 1) return;
   // Only handle "click" events if the viewer controls are visible
   // when the screen is touched.
-  viewerAllowClick = viewerControlsVisible;
+  // It turns out to be more annoying than it helps.
+  //viewerAllowClick = viewerControlsVisible;
 
   const t = e.touches[0];
   touchStartX = t.clientX;
