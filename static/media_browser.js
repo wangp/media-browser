@@ -479,6 +479,8 @@ setSortSizeBtn.addEventListener("click", () => setSort("size"));
 function toggleOrder() {
   sortAscending = !sortAscending;
   orderBtn.textContent = (sortAscending) ? "↑ Ascending" : "↓ Descending";
+  orderBtn.classList.add("active");
+  setTimeout(() => orderBtn.classList.remove("active"), 100);
 
   deriveItemGroupsAndLists();
   renderGrid();
@@ -532,9 +534,15 @@ function toggleShowNames() {
 
 showNamesBtn.addEventListener("click", toggleShowNames);
 
-function refreshDir() {
+async function refreshDir() {
+  refreshBtn.classList.add("active");
+
   // TODO: update dir tree based on changed filesystem
-  loadDir(currentPath, { refresh: true });
+  try {
+    await loadDir(currentPath, { refresh: true });
+  } finally {
+    setTimeout(() => refreshBtn.classList.remove("active"), 100);
+  }
 }
 
 refreshBtn.addEventListener("click", refreshDir);
@@ -747,6 +755,9 @@ thumbZoomSlider.addEventListener("wheel", e => {
 }, { passive: false });
 
 resetZoomBtn.addEventListener("click", () => {
+  resetZoomBtn.classList.add("active");
+  setTimeout(() => resetZoomBtn.classList.remove("active"), 100);
+
   thumbZoomSlider.value = DEFAULT_THUMB_ZOOM
   updateThumbSizes(DEFAULT_THUMB_ZOOM);
 });
