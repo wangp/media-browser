@@ -3,6 +3,7 @@
 let treeData = null;
 let currentPath = "";
 const openDirs = {};    // open/closed state in dir tree
+const dirCache = new Map(); // cached path -> { files }
 
 let allItems = [];      // unfiltered
 let filteredItems = [];
@@ -306,7 +307,7 @@ function toggleOpenDir(p) {
   span.previousElementSibling.textContent = (isOpen) ? "−" : "+";
 }
 
-async function loadDir(newPath) {
+async function loadDir(newPath, { refresh = false } = {}) {
   if (newPath !== currentPath) {
     groupOpen = {};
   }
@@ -315,10 +316,18 @@ async function loadDir(newPath) {
   allItems = [];
 
   async function addItemsForDir(dir) {
-    const r = await fetch(`/api/list?path=${encodeURIComponent(dir)}`);
-    const data = await r.json();
+    let files;
 
-    data.files.forEach(f => {
+    if (!refresh && dirCache.has(dir)) {
+      files = dirCache.get(dir);
+    } else {
+      const r = await fetch(`/api/list?path=${encodeURIComponent(dir)}`);
+      const data = await r.json();
+      files = data.files;
+      dirCache.set(dir, files);
+    }
+
+    files.forEach(f => {
       // The API gives us for each file:
       //    name
       //    type
@@ -491,7 +500,7 @@ showNamesBtn.addEventListener("click", toggleShowNames);
 
 function refreshDir() {
   // TODO: update dir tree based on changed filesystem
-  loadDir(currentPath);
+  loadDir(currentPath, { refresh: true });
 }
 
 refreshBtn.addEventListener("click", refreshDir);
