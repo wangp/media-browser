@@ -912,6 +912,16 @@ function manualAdvance(d, showUI) {
     clearTimeout(hideTimer);
     hideTimer = setTimeout(hideViewerControls, 1000);
   }
+
+  if (viewerControlsVisible) {
+    if (d < 0) {
+      navLeftEl.classList.add("active");
+      setTimeout(() => navLeftEl.classList.remove("active"), 100);
+    } else {
+      navRightEl.classList.add("active");
+      setTimeout(() => navRightEl.classList.remove("active"), 100);
+    }
+  }
 }
 
 function closeViewer() {
