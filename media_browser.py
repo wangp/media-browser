@@ -16,7 +16,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
 
@@ -603,8 +603,31 @@ def tree(request: Request) -> dict:
     return {"dirs": dirs}
 
 @app.get("/api/list")
-def list_dir(request: Request, path: OsPath = OsPath("")) -> dict:
+def list_dir(request: Request, path: OsPath) -> JSONResponse:
     base = safe_path(request.app.state.appstate, path)
+
+    try:
+        dir_mtime = base.stat().st_mtime
+    except FileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    # since query parameter
+    client_mtime_str = request.query_params.get("since")
+    client_mtime = None
+    try:
+        if client_mtime_str:
+            client_mtime = float(client_mtime_str)
+    except ValueError:
+        pass
+
+    # Check if client already has up-to-date info
+    if client_mtime and dir_mtime <= client_mtime:
+        return JSONResponse({
+            "not_modified": True,
+            "mtime": dir_mtime
+        })
+
+    # Enumerate files
     files = []
     for p in base.iterdir():
         if p.name.startswith("."):
@@ -617,7 +640,13 @@ def list_dir(request: Request, path: OsPath = OsPath("")) -> dict:
                 "mtime": st.st_mtime,
                 "size": st.st_size,
             })
-    return {"files": files}
+
+    return JSONResponse({
+        "not_modified": False,
+        "mtime": dir_mtime,
+        "files": files
+        }
+    )
 
 @app.get("/api/thumb")
 def thumb(request: Request, path: OsPath) -> FileResponse:

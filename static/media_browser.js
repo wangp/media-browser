@@ -3,7 +3,7 @@
 let treeData = null;
 let currentPath = "";
 const openDirs = {};    // open/closed state in dir tree
-const dirCache = new Map(); // cached path -> { files }
+const dirCache = new Map(); // path -> { mtime, files }
 
 let allItems = [];      // unfiltered
 let filteredItems = [];
@@ -307,27 +307,52 @@ function toggleOpenDir(p) {
   span.previousElementSibling.textContent = (isOpen) ? "−" : "+";
 }
 
-async function loadDir(newPath, { refresh = false } = {}) {
-  if (newPath !== currentPath) {
-    groupOpen = {};
-  }
-
-  currentPath = newPath;
-  allItems = [];
+async function loadDir(newPath, { refresh = false, changeRecursiveMode = false } = {}) {
+  const newItems = [];
+  let applyNewItems = changeRecursiveMode;
 
   async function addItemsForDir(dir) {
-    let files;
+    const cacheEntry = dirCache.get(dir);
+    let files = [];
 
-    if (!refresh && dirCache.has(dir)) {
-      files = dirCache.get(dir);
+    if (refresh || !cacheEntry) {
+      let query = new URLSearchParams({ path: dir });
+      if (cacheEntry?.mtime)
+        query.set("since", cacheEntry.mtime);
+
+      try {
+        const r = await fetch(`/api/list?${query.toString()}`, {
+          cache: "no-store"
+        });
+        if (!r.ok) {
+          console.warn(`Failed to list directory ${dir}: ${r.status}`);
+          files = [];
+          dirCache.set(dir, { files }); // cache empty
+          applyNewItems = true;
+        } else {
+          const data = await r.json();
+          if (data.not_modified && cacheEntry) {
+            // Directory hasn't changed; reuse cached files
+            files = cacheEntry.files;
+          } else {
+            // New or updated directory
+            files = data.files || [];
+            dirCache.set(dir, { files, mtime: data.mtime });
+            applyNewItems = true;
+          }
+        }
+      } catch (err) {
+        console.warn(`Error fetching directory ${dir}:`, err);
+        files = [];
+        dirCache.set(dir, { files }); // cache empty
+        applyNewItems = true;
+      }
     } else {
-      const r = await fetch(`/api/list?path=${encodeURIComponent(dir)}`);
-      const data = await r.json();
-      files = data.files;
-      dirCache.set(dir, files);
+      // Already cached, no refresh
+      files = cacheEntry.files;
     }
 
-    files.forEach(f => {
+    files.forEach(f => newItems.push({
       // The API gives us for each file:
       //    name
       //    type
@@ -335,8 +360,9 @@ async function loadDir(newPath, { refresh = false } = {}) {
       //    size
       // We add:
       //    _dir
-      allItems.push({ ...f, _dir: dir });
-    });
+        ...f,
+        _dir: dir
+    }));
 
     if (recursive) {
       // Find node in cached treeData to get its children of dir.
@@ -352,10 +378,18 @@ async function loadDir(newPath, { refresh = false } = {}) {
 
   await addItemsForDir(newPath);
 
-  deriveItemGroupsAndLists();
-  renderGrid();
+  if (newPath !== currentPath) {
+    currentPath = newPath;
+    groupOpen = {};
+    updateBreadcrumbs(currentPath);
+    applyNewItems = true;
+  }
 
-  updateBreadcrumbs(currentPath);
+  if (applyNewItems) {
+    allItems = newItems;
+    deriveItemGroupsAndLists();
+    renderGrid();
+  }
 }
 
 function findTreeNode(path, node) {
@@ -456,7 +490,7 @@ function toggleRecursive() {
   recursive = !recursive;
   recursiveBtn.classList.toggle("active", recursive);
 
-  loadDir(currentPath);
+  loadDir(currentPath, { changeRecursiveMode: true });
 }
 
 recursiveBtn.addEventListener("click", toggleRecursive);
