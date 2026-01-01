@@ -311,16 +311,27 @@ def gen_video_thumb(appstate: AppState, src: Path, dst: Path) -> bool:
         logger.warning(f"Failed to generate thumbnail for {src}")
         return False
 
-def ensure_thumb(appstate: AppState, src: Path) -> tuple[Path, str]:
+@dataclass(frozen=True)
+class ThumbResult:
+    path: Path
+    ok: bool
+    src_found: bool
+
+def ensure_thumb(appstate: AppState, src: Path) -> tuple[str, Path]:
     dst = thumb_path(appstate, src)
-    if dst.exists():
-        if dst.stat().st_size > 0:
-            return (dst, "ok")
-        else:
-            return (dst, "error")
 
     if not src.is_file():
-        return (dst, "src_not_found")
+        return ("src_not_found", dst)
+
+    if dst.exists():
+        dst_stat = dst.stat()
+        src_mtime = src.stat().st_mtime
+
+        if dst_stat.st_mtime >= src_mtime:
+            if dst_stat.st_size > 0:
+                return ("ok", dst)
+            else:
+                return ("error", dst)
 
     # Generate new thumbnail.
     generated = False
@@ -329,11 +340,12 @@ def ensure_thumb(appstate: AppState, src: Path) -> tuple[Path, str]:
     elif is_video(src):
         generated = gen_video_thumb(appstate, src, dst)
     if generated:
-        return (dst, "ok")
+        return ("ok", dst)
+
     # Leave an empty thumbnail to indicate error.
     with open(dst, "wb") as f:
         f.write(b"")
-    return (dst, "error")
+    return ("error", dst)
 
 # ---------------- Video formats ----------------
 
@@ -652,14 +664,14 @@ def list_dir(request: Request, path: OsPath) -> JSONResponse:
 def thumb(request: Request, path: OsPath) -> FileResponse:
     appstate = request.app.state.appstate
     src = safe_path(appstate, path)
-    (dst, res) = ensure_thumb(appstate, src)
-    if res == "ok":
-        return FileResponse(dst, media_type="image/jpeg")
-    elif res == "src_not_found":
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    else:
-        raise HTTPException(status_code=status.HTTP_410_GONE,
-                            detail="Missing thumbnail")
+    match ensure_thumb(appstate, src):
+        case ("ok", dst):
+            return FileResponse(dst, media_type="image/jpeg")
+        case ("src_not_found", dst):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        case _: # error
+            raise HTTPException(status_code=status.HTTP_410_GONE,
+                                detail="Missing thumbnail")
 
 @app.get("/api/file")
 def file(request: Request, path: OsPath) -> FileResponse:
