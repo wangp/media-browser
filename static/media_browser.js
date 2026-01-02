@@ -911,6 +911,7 @@ thumbFilterInput.addEventListener("keydown", e => {
 thumbFilterClearBtn.addEventListener("click", () => {
   thumbFilterInput.value = "";
   handleThumbFilterInput({ scroll: true });
+  thumbFilterInput.focus();
 });
 
 // ---------------- Context menu ----------------
