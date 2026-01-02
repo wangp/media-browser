@@ -802,6 +802,8 @@ function updateThumbSizes(value) {
 // ---------------- Filter thumbnails by name ----------------
 
 let filterText = "";
+let filterTimeout = null;
+const DEBOUNCE_DELAY = 150; // ms
 
 function textMatchesFilterText(text) {
   return filterText === "" || text.includes(filterText);
@@ -825,6 +827,8 @@ function updateThumbsForFilterText() {
     }
   }
   visibleItems = accum;
+
+  return true;
 }
 
 function scrollToNextVisibleThumb() {
@@ -866,44 +870,47 @@ function schedScrollToNextVisibleThumb() {
   });
 }
 
-thumbFilterInput.addEventListener("input", () => {
+function handleThumbFilterInput({ scroll = true }) {
+  clearTimeout(filterTimeout);
+  filterTimeout = null;
+
   const text = thumbFilterInput.value.trim().toLowerCase();
-  if (filterText !== text) {
-    filterText = text;
-    updateThumbsForFilterText();
+  if (text === filterText) return;
+  filterText = text;
+
+  updateThumbsForFilterText();
+  if (scroll)
     scrollToNextVisibleThumb();
+}
+
+thumbFilterInput.addEventListener("input", () => {
+  if (!filterTimeout)  {
+    handleThumbFilterInput({ scroll: true });
   }
+
+  // Debounce subsequent inputs
+  clearTimeout(filterTimeout);
+  filterTimeout = setTimeout(() => {
+    handleThumbFilterInput({ scroll: true });
+  }, DEBOUNCE_DELAY);
 });
 
 thumbFilterInput.addEventListener("keydown", e => {
   switch (e.key) {
     case "Enter":
-      const text = thumbFilterInput.value.trim().toLowerCase();
-      if (filterText !== text) {
-        filterText = text;
-        updateThumbsForFilterText();
-      }
-      scrollToNextVisibleThumb();
+      handleThumbFilterInput({ scroll: false });
+      scrollToNextVisibleThumb(); // scroll even no changed
       break;
     case "Escape":
-      const empty = "";
-      thumbFilterInput.value = empty;
-      if (filterText !== empty) {
-        filterText = empty;
-        updateThumbsForFilterText();
-      }
+      thumbFilterInput.value = "";
+      handleThumbFilterInput({ scroll: false});
       break;
   }
 });
 
 thumbFilterClearBtn.addEventListener("click", () => {
-  const text = "";
-  thumbFilterInput.value = text;
-  if (filterText !== text) {
-    filterText = text;
-    updateThumbsForFilterText();
-    scrollToNextVisibleThumb();
-  }
+  thumbFilterInput.value = "";
+  handleThumbFilterInput({ scroll: true });
 });
 
 // ---------------- Context menu ----------------
