@@ -56,6 +56,9 @@ const refreshBtn = document.getElementById("refreshBtn");
 const thumbZoomSlider = document.getElementById("thumbZoomSlider");
 const resetZoomBtn = document.getElementById("resetZoomBtn");
 
+const contextMenu = document.getElementById("contextMenu");
+const contextMenuItem = document.getElementById("contextMenuItem");
+
 const viewerEl = document.getElementById("viewer");
 const viewerTitleEl = document.getElementById("viewerTitle");
 const viewerImg = document.getElementById("viewerImg");
@@ -765,6 +768,89 @@ resetZoomBtn.addEventListener("click", () => {
 function updateThumbSizes(value) {
   grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${value}px, 1fr))`;
 }
+
+// ---------------- Context menu ----------------
+
+async function copyToClipboard(text) {
+  let copied = false;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      copied = true;
+    } catch (err) {
+      console.error("Clipboard write failed", err);
+    }
+  } else {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      document.execCommand("copy");
+      copied = true;
+    } catch (err) {
+      console.error("Fallback copy failed", err);
+    }
+    document.body.removeChild(textarea);
+  }
+  return copied;
+}
+
+function isContextMenuActive() {
+  return contextMenu.classList.contains("show");
+}
+
+function showContextMenu(x, y) {
+  contextMenuItem.textContent = "Copy file URL";
+
+  contextMenu.style.top = `${y}px`;
+  contextMenu.style.left = `${x}px`;
+  contextMenu.classList.add("show");
+  contextMenu.classList.remove("msg");
+}
+
+function hideContextMenu() {
+  contextMenu.classList.remove("show", "msg");
+}
+
+contextMenuItem.addEventListener("click", async () => {
+  const path = contextMenuItem.dataset.selection;
+  if (!path) return;
+
+  const url = `${window.location.origin}/api/file?path=${encodeURIComponent(path)}`;
+  const copied = await copyToClipboard(url);
+  if (copied) {
+    // Show feedback inside the menu
+    const msg = copied ? "Copied to clipboard" : "Copy failed";
+    contextMenuItem.textContent = msg;
+    contextMenu.classList.add("msg");
+  }
+
+  // Hide menu after a short delay
+  setTimeout(hideContextMenu, 1000);
+});
+
+grid.addEventListener("contextmenu", e => {
+  // Shift + Right click to access native context menu
+  if (e.shiftKey) return;
+
+  const thumb = e.target.closest(".thumb");
+  if (!thumb) return;
+
+  e.preventDefault();
+  contextMenuItem.dataset.selection = thumb.dataset.key;
+  showContextMenu(e.clientX, e.clientY);
+});
+
+// Hide context menu if clicked anywhere else.
+document.addEventListener("click", e => {
+  if (isContextMenuActive() && !e.target.closest("#contextMenu"))
+    hideContextMenu();
+});
+document.addEventListener("keydown", e => {
+  if (e.key == "Escape" && isContextMenuActive())
+    hideContextMenu();
+});
 
 // ---------------- Viewer ----------------
 

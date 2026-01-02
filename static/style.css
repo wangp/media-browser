@@ -17,6 +17,11 @@
   --accent-muted: #555;
   --accent-strong: #777;
 
+  --bg-menu: #222;
+  --bg-menu-item-hover: #444;
+  --bg-menu-msg: #a3d77d;
+  --text-menu-msg: #1a1a1a;
+
   --radius-sm: 4px;
   --radius-lg: 999px;
 }
@@ -322,6 +327,56 @@ button.active:hover {
 
 #resetZoomBtn {
   border-radius: var(--radius-lg);
+}
+
+/* ================= Context menu ================= */
+
+#contextMenu {
+  position: absolute;
+  z-index: 1000;
+  min-width: 150px;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  text-align: center;
+  background: var(--bg-menu);
+  color: var(--text-main);
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+#contextMenu.show {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+#contextMenu li {
+  padding: 8px 14px;
+  user-select: none;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+#contextMenu li:hover {
+  background-color: var(--bg-menu-item-hover);
+}
+
+#contextMenu.msg {
+  background: var(--bg-menu-msg);
+  color: var(--text-menu-msg);
+  animation: popMsg 0.3s ease forwards;
+}
+
+#contextMenu.msg li:hover {
+  background-color: var(--bg-menu-msg);
+}
+
+@keyframes popMsg {
+  0% { transform: scale(1); opacity: 0.7; }
+  50% { transform: scale(1.1); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
 }
 
 /* ================= Viewer ================= */
