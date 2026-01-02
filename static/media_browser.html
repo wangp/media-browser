@@ -32,10 +32,6 @@
     <button id="refreshBtn">⟳ Refresh</button>
   </div>
   <div id="breadcrumbDiv"></div>
-  <div class="group right-align">
-    <input id="thumbZoomSlider" type="range" min="100" max="600" value="180">
-    <button id="resetZoomBtn">Reset</button>
-  </div>
 </div>
 
 <div id="main">
@@ -43,9 +39,13 @@
   <div id="dragbar"></div>
   <div id="gridArea">
     <div id="thumbFilterBar">
-      <div class="group" id="thumbFilterGroup">
+      <div id="thumbFilterGroup">
         <input id="thumbFilterInput" type="text" placeholder="Filter by name" autocomplete="off">
         <button id="thumbFilterClearBtn">✕</button>
+      </div>
+      <div class="group right-align">
+        <input id="thumbZoomSlider" type="range" min="100" max="600" value="180">
+        <button id="resetZoomBtn">Reset</button>
       </div>
     </div>
     <div id="grid"></div>

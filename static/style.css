@@ -60,10 +60,6 @@ body {
   white-space: nowrap;
 }
 
-.group.right-align {
-  margin-left: auto;
-}
-
 /* ================= Buttons ================= */
 
 button {
@@ -346,17 +342,20 @@ button.active:hover {
   position: sticky;
   top: 0;
   display: flex;
-  flex: 0 0 auto;
-  justify-content: center;
-  background: var(--bg-panel);
+  align-items: center;
   padding-bottom: 4px;
+  background: var(--bg-panel);
 }
 
 #thumbFilterGroup {
   display: flex;
   align-items: center;
-  gap: 6px;
+  flex: 1 1 auto;                   /* grow/shrink as needed */
+  max-width: calc(100% - 200px);    /* leave room for right group */
+  min-width: 120px;                 /* don't shrink too much */
+  margin: 0 auto;                   /* center by default */
   padding: 4px 8px;
+  box-sizing: border-box;
   background: var(--bg-panel-alt);
   border: 1px solid var(--border-main);
   border-radius: var(--radius-lg);
@@ -367,7 +366,8 @@ button.active:hover {
 }
 
 #thumbFilterInput {
-  width: 220px;
+  flex: 1 1 auto;
+  min-width: 60px;
   padding: 4px 6px;
   background: transparent;
   border: none;
@@ -383,14 +383,15 @@ button.active:hover {
 }
 
 #thumbFilterClearBtn {
+  flex: 0 0 auto;
   width: 22px;
   height: 22px;
   padding: 0;
-  font-size: 12px;
   border: none;
   border-radius: var(--radius-lg);
   background: var(--bg-btn);
   color: var(--text-dim);
+  font-size: 12px;
   cursor: pointer;
 
   /* Initially hidden */
@@ -399,7 +400,6 @@ button.active:hover {
   transition: opacity 0.2s ease;
 }
 
-/* Show when input has text */
 #thumbFilterInput:not(:placeholder-shown) + #thumbFilterClearBtn {
   opacity: 1;
   pointer-events: auto;
@@ -412,6 +412,13 @@ button.active:hover {
 
 #thumbFilterClearBtn:active {
   background: var(--bg-btn-active);
+}
+
+#thumbFilterBar .group.right-align {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding-right: 20px;
 }
 
 /* ================= Context menu ================= */
