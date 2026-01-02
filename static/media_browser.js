@@ -6,12 +6,13 @@ const openDirs = {};    // open/closed state in dir tree
 const dirCache = new Map(); // path -> { mtime, files }
 
 let allItems = [];      // unfiltered
-let filteredItems = [];
+let filteredItems = []; // after filter by media type
 let groups = {};        // dirPath -> array of items
 let groupOrder = [];
 let groupOpen = {};     // open/closed state of groups in grid
-let navItems = [];
-let navIndex = 0;
+let gridSourceItems = []; // flattened and sorted
+let visibleItems = [];  // after filter by name
+let navIndex = 0;       // index into visibleItems
 
 let sortType = "name";  // name | mtime | size
 let sortAscending = true;
@@ -55,6 +56,8 @@ const showNamesBtn = document.getElementById("showNamesBtn");
 const refreshBtn = document.getElementById("refreshBtn");
 const thumbZoomSlider = document.getElementById("thumbZoomSlider");
 const resetZoomBtn = document.getElementById("resetZoomBtn");
+const thumbFilterInput = document.getElementById("thumbFilterInput");
+const thumbFilterClearBtn = document.getElementById("thumbFilterClearBtn");
 
 const contextMenu = document.getElementById("contextMenu");
 const contextMenuItem = document.getElementById("contextMenuItem");
@@ -294,6 +297,7 @@ function openAndLoadDir(path) {
   loadDir(path);
   openDirs[path] = true;
   highlightTreeDir(path);
+  schedScrollToNextVisibleThumb();
 }
 
 function toggleOpenDir(p) {
@@ -355,17 +359,23 @@ async function loadDir(newPath, { refresh = false, changeRecursiveMode = false }
       files = cacheEntry.files;
     }
 
-    files.forEach(f => newItems.push({
-      // The API gives us for each file:
-      //    name
-      //    type
-      //    mtime
-      //    size
-      // We add:
-      //    _dir
+    files.forEach(f => {
+      const key = joinOsPaths(dir, f.name);
+      const item = {
+        // The API gives us for each file:
+        //    name
+        //    type
+        //    mtime
+        //    size
         ...f,
-        _dir: dir
-    }));
+
+        // We add these for each item:
+        _dir: dir,
+        _key: key, // i.e. path
+        _pathForFiltering: decodeOsPathForDisplay(key).toLowerCase()
+      };
+      newItems.push(item);
+    });
 
     if (recursive) {
       // Find node in cached treeData to get its children of dir.
@@ -406,11 +416,11 @@ function findTreeNode(path, node) {
 }
 
 function deriveItemGroupsAndLists() {
-  filteredItems = allItems.filter(filterMedia);
+  filteredItems = allItems.filter(itemMatchesMediaType);
 
   groups = {};
   groupOrder = [];
-  navItems = [];
+  gridSourceItems = [];
 
   if (recursive && groupByDir) {
     // Build groups from filtered items
@@ -425,15 +435,18 @@ function deriveItemGroupsAndLists() {
 
     groupOrder.forEach(dir => {
       groups[dir] = sortItems(groups[dir]);
-      navItems.push(...groups[dir]);
+      gridSourceItems.push(...groups[dir]);
     });
   }
   else {
-    navItems = sortItems(filteredItems);
+    gridSourceItems = sortItems(filteredItems);
   }
+
+  // Will be updated by renderGrid if further filtered by name.
+  visibleItems = gridSourceItems;
 }
 
-function filterMedia(item) {
+function itemMatchesMediaType(item) {
   return (mediaType === "all") || (item.type === mediaType);
 }
 
@@ -496,6 +509,7 @@ function toggleRecursive() {
   recursiveBtn.classList.toggle("active", recursive);
 
   loadDir(currentPath, { changeRecursiveMode: true });
+  schedScrollToNextVisibleThumb();
 }
 
 recursiveBtn.addEventListener("click", toggleRecursive);
@@ -542,7 +556,7 @@ async function refreshDir() {
 
   // TODO: update dir tree based on changed filesystem
   try {
-    await loadDir(currentPath, { refresh: true });
+    loadDir(currentPath, { refresh: true });
   } finally {
     setTimeout(() => refreshBtn.classList.remove("active"), 100);
   }
@@ -571,6 +585,7 @@ function updateBreadcrumbs(pathStr) {
       if (pathto !== currentPath) {
         loadDir(pathto);
         highlightTreeDir(pathto);
+        schedScrollToNextVisibleThumb();
       }
     });
 
@@ -594,10 +609,13 @@ function renderGrid() {
 
   // Map existing thumbs by stable key
   const existing = new Map(
-    [...grid.querySelectorAll(".thumb")].map(d => [d.dataset.key, d])
+    [...grid.querySelectorAll(".thumb")].map(thumb => [thumb._item._key, thumb])
   );
 
   const frag = document.createDocumentFragment();
+
+  // Accumulate visible items as we go
+  let accum = []; // new array
 
   if (recursive && groupByDir) {
     groupOrder.forEach(dir => {
@@ -631,8 +649,13 @@ function renderGrid() {
       // Container for group thumbnails
       const groupItems = document.createElement("div");
       groupItems.className = "group-items";
-      groups[dir].forEach(f => {
-        groupItems.appendChild(addThumb(f, existing));
+      groups[dir].forEach(item => {
+        const isVisible = textMatchesFilterText(item._pathForFiltering);
+        const thumb = createOrReuseThumb(item, existing, isVisible);
+        groupItems.appendChild(thumb);
+        if (isVisible) {
+          accum.push(item);
+        }
       });
       groupItems.style.display = groupOpen[dir] ? "contents" : "none";
       frag.appendChild(groupItems);
@@ -649,14 +672,22 @@ function renderGrid() {
         if (dir === currentPath) return;
         loadDir(dir);
         highlightTreeDir(dir);
+        schedScrollToNextVisibleThumb();
       };
     });
   } else {
     // Flat grid
-    navItems.forEach(f => {
-      frag.appendChild(addThumb(f, existing));
+    gridSourceItems.forEach(item => {
+      const isVisible = textMatchesFilterText(item._pathForFiltering);
+      const thumb = createOrReuseThumb(item, existing, isVisible);
+      frag.appendChild(thumb);
+      if (isVisible) {
+        accum.push(item);
+      }
     });
   }
+
+  visibleItems = accum;
 
   grid.replaceChildren(frag);
 }
@@ -668,14 +699,13 @@ function createNoMediaMsg() {
   return msg;
 }
 
-function addThumb(item, existing) {
-  const key = joinOsPaths(item._dir, item.name);
-  let d = existing.get(key);
+function createOrReuseThumb(item, existing, isVisible) {
+  let d = existing.get(item._key);
 
   if (!d) {
     d = document.createElement("div");
     d.className = "thumb";
-    d.dataset.key = key;
+    d._item = item; // keep reference to item
 
     const imgPlaceholder = document.createElement("div");
     imgPlaceholder.className = "thumb-img-placeholder";
@@ -698,6 +728,7 @@ function addThumb(item, existing) {
     }
   }
 
+  d.classList.toggle("hide", !isVisible);
   d.classList.toggle("hide-name", !showNames);
 
   return d;
@@ -710,11 +741,10 @@ function thumbObserverCallback(entries, observer) {
 
       if (!placeholder.querySelector("img")) {
         const item = placeholder.item;
-        const key = joinOsPaths(item._dir, item.name);
 
         const img = document.createElement("img");
         img.loading = "lazy";
-        img.src = "/api/thumb?path=" + encodeURIComponent(key);
+        img.src = "/api/thumb?path=" + encodeURIComponent(item._key);
         img.onload = () => { placeholder.style.background = "none"; };
         placeholder.appendChild(img);
       }
@@ -769,6 +799,113 @@ function updateThumbSizes(value) {
   grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${value}px, 1fr))`;
 }
 
+// ---------------- Filter thumbnails by name ----------------
+
+let filterText = "";
+
+function textMatchesFilterText(text) {
+  return filterText === "" || text.includes(filterText);
+}
+
+function updateThumbsForFilterText() {
+  const thumbs = grid.querySelectorAll(".thumb");
+
+  if (filterText === "") {
+    visibleItems = gridSourceItems;
+    thumbs.forEach(t => t.classList.remove("hide"));
+    return;
+  }
+
+  let accum = []; // new array
+  for (const thumb of thumbs) {
+    const match = thumb._item._pathForFiltering.includes(filterText);
+    thumb.classList.toggle("hide", !match);
+    if (match) {
+      accum.push(thumb._item);
+    }
+  }
+  visibleItems = accum;
+}
+
+function scrollToNextVisibleThumb() {
+  const thumbs = grid.querySelectorAll(".thumb:not(.hide)");
+  if (thumbs.length === 0) return;
+
+  const containerRect = grid.getBoundingClientRect();
+  const scrollTop = grid.scrollTop;
+
+  let targetThumb = null;
+
+  for (let i = 0; i < thumbs.length; i++) {
+    const r = thumbs[i].getBoundingClientRect();
+    if (r.top > containerRect.top) {
+      targetThumb = thumbs[i];
+      break;
+    }
+  }
+
+  // If none is below the top, pick the first thumb in the grid
+  if (!targetThumb) targetThumb = thumbs[0];
+
+  const thumbRect = targetThumb.getBoundingClientRect();
+  const offset = (recursive && groupByDir) ? 40 : 5; // room for group label
+  const targetTop = scrollTop + (thumbRect.top - containerRect.top - offset);
+
+  grid.scrollTo({
+    top: targetTop,
+    //behavior: "smooth"
+  });
+}
+
+function schedScrollToNextVisibleThumb() {
+  // Wait for layout to stabilise after loadDir/renderGrid.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      scrollToNextVisibleThumb();
+    });
+  });
+}
+
+thumbFilterInput.addEventListener("input", () => {
+  const text = thumbFilterInput.value.trim().toLowerCase();
+  if (filterText !== text) {
+    filterText = text;
+    updateThumbsForFilterText();
+    scrollToNextVisibleThumb();
+  }
+});
+
+thumbFilterInput.addEventListener("keydown", e => {
+  switch (e.key) {
+    case "Enter":
+      const text = thumbFilterInput.value.trim().toLowerCase();
+      if (filterText !== text) {
+        filterText = text;
+        updateThumbsForFilterText();
+      }
+      scrollToNextVisibleThumb();
+      break;
+    case "Escape":
+      const empty = "";
+      thumbFilterInput.value = empty;
+      if (filterText !== empty) {
+        filterText = empty;
+        updateThumbsForFilterText();
+      }
+      break;
+  }
+});
+
+thumbFilterClearBtn.addEventListener("click", () => {
+  const text = "";
+  thumbFilterInput.value = text;
+  if (filterText !== text) {
+    filterText = text;
+    updateThumbsForFilterText();
+    scrollToNextVisibleThumb();
+  }
+});
+
 // ---------------- Context menu ----------------
 
 async function copyToClipboard(text) {
@@ -796,6 +933,8 @@ async function copyToClipboard(text) {
   return copied;
 }
 
+let contextMenuSelectedItem = null;
+
 function isContextMenuActive() {
   return contextMenu.classList.contains("show");
 }
@@ -810,13 +949,15 @@ function showContextMenu(x, y) {
 }
 
 function hideContextMenu() {
+  contextMenuSelectedItem = null;
+
   contextMenu.classList.remove("show", "msg");
 }
 
 contextMenuItem.addEventListener("click", async () => {
-  const path = contextMenuItem.dataset.selection;
-  if (!path) return;
+  if (!contextMenuSelectedItem) return;
 
+  const path = contextMenuSelectedItem._key;
   const url = `${window.location.origin}/api/file?path=${encodeURIComponent(path)}`;
   const copied = await copyToClipboard(url);
   if (copied) {
@@ -838,7 +979,7 @@ grid.addEventListener("contextmenu", e => {
   if (!thumb) return;
 
   e.preventDefault();
-  contextMenuItem.dataset.selection = thumb.dataset.key;
+  contextMenuSelectedItem = thumb._item;
   showContextMenu(e.clientX, e.clientY);
 });
 
@@ -859,9 +1000,9 @@ function isViewerActive() {
 }
 
 function openViewer(item) {
-  const idx = navItems.findIndex(f => f._dir === item._dir && f.name === item.name);
+  const idx = visibleItems.findIndex(vi => vi._key === item._key);
   if (idx === -1) {
-    console.warn(`openView() item not found: item._dir=${item._dir}, item.name=${item.name}`);
+    console.warn("Item not in visibleItems, cannot open:", item);
     return;
   }
 
@@ -874,7 +1015,7 @@ function openViewer(item) {
 
   viewerEl.style.display = "block";
   hideViewerControls();
-  showItem(navItems[navIndex]);
+  showItem(visibleItems[navIndex]);
 }
 
 async function showItem(item) {
@@ -898,7 +1039,7 @@ async function showItem(item) {
     viewerVideo.style.display = "none";
 
     // Show image
-    const itemPath = joinOsPaths(item._dir, item.name);
+    const itemPath = item._key;
     viewerImg.src = `/api/file?path=${encodeURIComponent(itemPath)}`;
     viewerImg.style.display = "block";
   }
@@ -908,7 +1049,7 @@ async function showVideoItem(item) {
   viewerImg.style.display = "none";
   viewerVideo.style.display = "block";
 
-  const itemPath = joinOsPaths(item._dir, item.name);
+  const itemPath = item._key;
   const ext = item.name.split(".").pop().toLowerCase();
 
   const commonExts = ["mp4", "m4v", "webm", "ogg", "ogv", "mkv"];
@@ -957,10 +1098,10 @@ async function showVideoItem(item) {
 }
 
 function makeShuffleOrder(anchorIdx) {
-  shuffleOrder = navItems.map((_, i) => i);
+  shuffleOrder = visibleItems.map((_, i) => i);
 
   // Remove anchor and put it first
-  if (anchorIdx >= 0 && anchorIdx < navItems.length) {
+  if (anchorIdx >= 0 && anchorIdx < visibleItems.length) {
     shuffleOrder.splice(shuffleOrder.indexOf(anchorIdx), 1);
     shuffleOrder.unshift(anchorIdx);
   }
@@ -973,7 +1114,7 @@ function makeShuffleOrder(anchorIdx) {
 }
 
 function viewerNav(d) {
-  if (navItems.length < 2)
+  if (visibleItems.length < 2)
     return;
 
   if (shuffleEnabled) {
@@ -981,10 +1122,10 @@ function viewerNav(d) {
     const j = (i + d + shuffleOrder.length) % shuffleOrder.length;
     navIndex = shuffleOrder[j];
   } else {
-    navIndex = (navIndex + d + navItems.length) % navItems.length;
+    navIndex = (navIndex + d + visibleItems.length) % visibleItems.length;
   }
 
-  showItem(navItems[navIndex]);
+  showItem(visibleItems[navIndex]);
 }
 
 function manualAdvance(d, showUI) {

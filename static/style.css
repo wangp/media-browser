@@ -131,6 +131,13 @@ button.active:hover {
   background: var(--accent-muted);
 }
 
+#gridArea {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* prevents grid overflow leaking */
+}
+
 #grid {
   flex: 1;
   display: grid;
@@ -253,6 +260,10 @@ button.active:hover {
   aspect-ratio: 16 / 9;
 }
 
+.thumb.hide {
+  display: none;
+}
+
 .thumb-img-placeholder {
   width: 100%;
   height: 100%;
@@ -327,6 +338,80 @@ button.active:hover {
 
 #resetZoomBtn {
   border-radius: var(--radius-lg);
+}
+
+/* ================= Thumbnail filter ================= */
+
+#thumbFilterBar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: center;
+  background: var(--bg-panel);
+  padding-bottom: 4px;
+}
+
+#thumbFilterGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--border-main);
+  border-radius: var(--radius-lg);
+}
+
+#thumbFilterGroup:focus-within {
+  border-color: var(--accent-muted);
+}
+
+#thumbFilterInput {
+  width: 220px;
+  padding: 4px 6px;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-main);
+  transition: color 0.2s ease;
+}
+
+#thumbFilterInput::placeholder {
+  color: var(--text-dim);
+  opacity: 0.7;
+  transition: opacity 0.2s ease;
+}
+
+#thumbFilterClearBtn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 12px;
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--bg-btn);
+  color: var(--text-dim);
+  cursor: pointer;
+
+  /* Initially hidden */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+/* Show when input has text */
+#thumbFilterInput:not(:placeholder-shown) + #thumbFilterClearBtn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+#thumbFilterClearBtn:hover {
+  background: var(--bg-btn-hover);
+  color: var(--text-main);
+}
+
+#thumbFilterClearBtn:active {
+  background: var(--bg-btn-active);
 }
 
 /* ================= Context menu ================= */
