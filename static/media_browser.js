@@ -625,6 +625,7 @@ function renderGrid() {
       // Header
       const header = document.createElement("div");
       header.className = "group-divider";
+      header.dataset.dir = dir;
 
       const caret = document.createElement("span");
       caret.className = "caret";
@@ -646,6 +647,8 @@ function renderGrid() {
       header.append(label, caret);
       frag.appendChild(header);
 
+      let dirVisibleItems = 0;
+
       // Container for group thumbnails
       const groupItems = document.createElement("div");
       groupItems.className = "group-items";
@@ -655,6 +658,7 @@ function renderGrid() {
         groupItems.appendChild(thumb);
         if (isVisible) {
           accum.push(item);
+          dirVisibleItems++;
         }
       });
       groupItems.style.display = groupOpen[dir] ? "contents" : "none";
@@ -674,6 +678,8 @@ function renderGrid() {
         highlightTreeDir(dir);
         schedScrollToNextVisibleThumb();
       };
+
+      header.classList.toggle("hide", dirVisibleItems == 0);
     });
   } else {
     // Flat grid
@@ -811,22 +817,37 @@ function textMatchesFilterText(text) {
 
 function updateThumbsForFilterText() {
   const thumbs = grid.querySelectorAll(".thumb");
+  const groupHeaders = grid.querySelectorAll(".group-divider");
 
   if (filterText === "") {
-    visibleItems = gridSourceItems;
     thumbs.forEach(t => t.classList.remove("hide"));
+    groupHeaders.forEach(hdr => hdr.classList.remove("hide"));
+    visibleItems = gridSourceItems;
     return;
   }
 
-  let accum = []; // new array
+  let accumItems = []; // new array
+  let seenDir = (recursive && groupByDir) ? {} : null;
+
   for (const thumb of thumbs) {
-    const match = thumb._item._pathForFiltering.includes(filterText);
+    const item = thumb._item;
+    const match = item._pathForFiltering.includes(filterText);
     thumb.classList.toggle("hide", !match);
     if (match) {
-      accum.push(thumb._item);
+      accumItems.push(item);
+      if (seenDir && !seenDir[item._dir]) {
+        seenDir[item._dir] = true;
+      }
     }
   }
-  visibleItems = accum;
+
+  if (seenDir) {
+    groupHeaders.forEach(hdr => {
+      hdr.classList.toggle("hide", !seenDir[hdr.dataset.dir]);
+    });
+  }
+
+  visibleItems = accumItems;
 
   return true;
 }
