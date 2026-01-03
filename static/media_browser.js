@@ -288,7 +288,15 @@ function highlightTreeDir(newPath) {
 
   // Add selection to the target node
   const newNode = tree.querySelector(`.dir-header span[data-path='${newPath}']`);
-  if (newNode) newNode.parentElement.classList.add("selected");
+  if (newNode) {
+    const header = newNode.parentElement;
+    header.classList.add("selected");
+    header.scrollIntoView({
+      //behavior: "smooth",
+      block: "nearest",
+      inline: "nearest"
+    });
+  }
 }
 
 function openAndLoadDir(path) {
@@ -581,13 +589,7 @@ function updateBreadcrumbs(pathStr) {
     span.dataset.path = pathto;
     span.textContent = label;
 
-    span.addEventListener("click", () => {
-      if (pathto !== currentPath) {
-        loadDir(pathto);
-        highlightTreeDir(pathto);
-        schedScrollToNextVisibleThumb();
-      }
-    });
+    span.addEventListener("click", () => openAndLoadDir(pathto));
 
     fragment.appendChild(span);
   }
@@ -674,10 +676,7 @@ function renderGrid() {
 
       label.onclick = e => {
         e.stopPropagation();
-        if (dir === currentPath) return;
-        loadDir(dir);
-        highlightTreeDir(dir);
-        schedScrollToNextVisibleThumb();
+        openAndLoadDir(dir);
       };
 
       header.classList.toggle("hide", dirVisibleItems == 0);
@@ -1656,7 +1655,6 @@ window.addEventListener('orientationchange', resizeMain);
 loadTree().then(() => {
   const initialDir = treeData.dirs[0]?.path;
   if (initialDir) {
-    loadDir(initialDir);
-    highlightTreeDir(initialDir);
+    openAndLoadDir(initialDir)
   }
 });
