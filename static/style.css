@@ -17,7 +17,7 @@
   --accent-muted: #555;
   --accent-strong: #777;
 
-  --bg-menu: #222;
+  --bg-menu-item: #222;
   --bg-menu-item-hover: #444;
   --bg-menu-msg: #a3d77d;
   --text-menu-msg: #1a1a1a;
@@ -443,38 +443,42 @@ button.active:hover {
   padding: 4px 0;
   list-style: none;
   text-align: center;
-  background: var(--bg-menu);
-  color: var(--text-main);
   border-radius: var(--radius-sm);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
-#contextMenu.show {
+#contextMenu li {
+  display: none;
+  padding: 8px 14px;
+  user-select: none;
+  cursor: pointer;
+}
+
+#contextMenu.show-items {
+  background: var(--bg-menu-item);
+  color: var(--text-main);
   opacity: 1;
   pointer-events: auto;
 }
 
-#contextMenu li {
-  padding: 8px 14px;
-  user-select: none;
-  cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
+#contextMenu.show-items li.menu-item {
+  display: block;
 }
 
-#contextMenu li:hover {
+#contextMenu.show-items li.menu-item:hover {
   background-color: var(--bg-menu-item-hover);
 }
 
-#contextMenu.msg {
+#contextMenu.show-msg {
   background: var(--bg-menu-msg);
   color: var(--text-menu-msg);
   animation: popMsg 0.3s ease forwards;
 }
 
-#contextMenu.msg li:hover {
-  background-color: var(--bg-menu-msg);
+#contextMenu.show-msg li.menu-msg {
+  display: block;
 }
 
 @keyframes popMsg {

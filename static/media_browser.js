@@ -61,7 +61,6 @@ const thumbFilterClearBtn = document.getElementById("thumbFilterClearBtn");
 const fileCountSpan = document.getElementById("fileCountSpan");
 
 const contextMenu = document.getElementById("contextMenu");
-const contextMenuItem = document.getElementById("contextMenuItem");
 
 const viewerEl = document.getElementById("viewer");
 const viewerTitleEl = document.getElementById("viewerTitle");
@@ -985,39 +984,59 @@ async function copyToClipboard(text) {
 let contextMenuSelectedItem = null;
 
 function isContextMenuActive() {
-  return contextMenu.classList.contains("show");
+  return contextMenu.classList.contains("show-items");
 }
 
 function showContextMenu(x, y) {
-  contextMenuItem.textContent = "Copy file URL";
-
   contextMenu.style.top = `${y}px`;
   contextMenu.style.left = `${x}px`;
-  contextMenu.classList.add("show");
-  contextMenu.classList.remove("msg");
+  contextMenu.classList.remove("show-msg");
+  contextMenu.classList.add("show-items");
 }
 
 function hideContextMenu() {
   contextMenuSelectedItem = null;
 
-  contextMenu.classList.remove("show", "msg");
+  contextMenu.classList.remove("show-items");
+  contextMenu.classList.remove("show-msg");
 }
 
-contextMenuItem.addEventListener("click", async () => {
+function showContextMenuMessage(msg, clickedItem) {
+  const msgEl = contextMenu.querySelector(".menu-msg");
+  msgEl.textContent = msg;
+
+  // Compute how far the clicked item is from the top of the menu
+  const itemOffset = clickedItem.offsetTop;
+
+  // Move the menu up so the feedback aligns with the item
+  const menuX = contextMenu.style.left.replace("px", "") || 0;
+  const menuY = contextMenu.style.top.replace("px", "") || 0;
+
+  contextMenu.style.top = `${parseFloat(menuY) + itemOffset}px`;
+  contextMenu.style.left = `${menuX}px`;
+
+  contextMenu.classList.remove("show-items");
+  contextMenu.classList.add("show-msg");
+
+  setTimeout(hideContextMenu, 1000);
+}
+
+contextMenu.addEventListener("click", async (e) => {
   if (!contextMenuSelectedItem) return;
 
-  const path = contextMenuSelectedItem._key;
-  const url = `${window.location.origin}/api/file?path=${encodeURIComponent(path)}`;
-  const copied = await copyToClipboard(url);
-  if (copied) {
-    // Show feedback inside the menu
-    const msg = copied ? "Copied to clipboard" : "Copy failed";
-    contextMenuItem.textContent = msg;
-    contextMenu.classList.add("msg");
-  }
+  const clickedItem = e.target.closest("li.menu-item");
+  if (!clickedItem) return;
 
-  // Hide menu after a short delay
-  setTimeout(hideContextMenu, 1000);
+  const action = clickedItem.dataset.action;
+  switch (action) {
+    case "copy-link":
+      const path = contextMenuSelectedItem._key;
+      const url = `${window.location.origin}/api/file?path=${encodeURIComponent(path)}`;
+      const copied = await copyToClipboard(url);
+      const msg = copied ? "Copied to clipboard" : "Copied failed";
+      showContextMenuMessage(msg, clickedItem);
+      break;
+  }
 });
 
 grid.addEventListener("contextmenu", e => {
