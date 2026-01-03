@@ -136,47 +136,135 @@ function basename(p) {
 
 // ---------------- Dragbar ----------------
 
-let isDragging = false;
+class Dragbar {
+  constructor({
+    dragbar,
+    panel,
+    minWidth = 150,
+    maxWidthRatio = 0.5,
+    collapseThreshold = 80,
+    expandThreshold = 120
+  }) {
+    this.dragbar = dragbar;
+    this.panel = panel;
 
-function startDrag(clientX) {
-  isDragging = true;
-  document.body.style.cursor = "col-resize";
-}
+    this.minWidth = minWidth;
+    this.maxWidthRatio = maxWidthRatio;
+    this.collapseThreshold = collapseThreshold;
+    this.expandThreshold = expandThreshold;
 
-function doDrag(clientX) {
-  if (isDragging) {
-    let newWidth = clientX; // distance from left edge
-    newWidth = Math.max(150, Math.min(newWidth, window.innerWidth * 0.5));
-    tree.style.width = newWidth + "px";
+    this.isDragging = false;
+    this.didDrag = false;
+    this.isCollapsed = false;
+    this.dragStartX = 0;
+    this.lastWidth = panel.offsetWidth;
+
+    this.bindEvents();
   }
-}
 
-function endDrag() {
-  if (isDragging) {
-    isDragging = false;
+  bindEvents() {
+    // Mouse
+    this.dragbar.addEventListener("mousedown", e => {
+      e.preventDefault();
+      this.startDrag(e.clientX);
+    });
+
+    document.addEventListener("mousemove", e =>
+      this.doDrag(e.clientX)
+    );
+    document.addEventListener("mouseup", () =>
+      this.endDrag()
+    );
+
+    // Touch
+    this.dragbar.addEventListener("touchstart", e => {
+      e.preventDefault();
+      this.startDrag(e.touches[0].clientX);
+    }, { passive: false });
+
+    document.addEventListener("touchmove", e =>
+      this.doDrag(e.touches[0].clientX),
+      { passive: false }
+    );
+
+    document.addEventListener("touchend", () =>
+      this.endDrag()
+    );
+
+    // Click-to-toggle
+    this.dragbar.addEventListener("click", () => {
+      if (!this.didDrag) {
+        this.toggle();
+      }
+    });
+  }
+
+  startDrag(clientX) {
+    this.isDragging = true;
+    this.didDrag = false;
+    this.dragStartX = clientX;
+    document.body.style.cursor = "col-resize";
+  }
+
+  doDrag(clientX) {
+    if (!this.isDragging) return;
+
+    if (Math.abs(clientX - this.dragStartX) > 3) {
+      this.didDrag = true;
+    }
+
+    const maxWidth = window.innerWidth * this.maxWidthRatio;
+
+    // Collapse
+    if (!this.isCollapsed && clientX < this.collapseThreshold) {
+      this.panel.style.minWidth = "0";
+      this.panel.style.width = "0px";
+      this.isCollapsed = true;
+      return;
+    }
+
+    // Expand
+    if (this.isCollapsed && clientX > this.expandThreshold) {
+      this.panel.style.minWidth = this.minWidth + "px";
+      this.panel.style.width = this.lastWidth + "px";
+      this.isCollapsed = false;
+    }
+
+    // Resize
+    if (!this.isCollapsed) {
+      const w = Math.max(this.minWidth, Math.min(clientX, maxWidth));
+      this.panel.style.width = w + "px";
+      this.lastWidth = w;
+    }
+  }
+
+  endDrag() {
+    if (!this.isDragging) return;
+    this.isDragging = false;
     document.body.style.cursor = "default";
   }
+
+  toggle() {
+    if (!this.isCollapsed) {
+      this.panel.style.minWidth = "0";
+      this.panel.style.width = "0px";
+      this.isCollapsed = true;
+    } else {
+      this.panel.style.minWidth = this.minWidth + "px";
+      this.panel.style.width = this.lastWidth + "px";
+      this.isCollapsed = false;
+    }
+  }
 }
 
-// Mouse events
-dragbar.addEventListener("mousedown", e => {
-  e.preventDefault();
-  startDrag(e.clientX);
+const treeDragbar = new Dragbar({
+  dragbar,
+  panel: tree,
+  minWidth: 150,
+  maxWidthRatio: 0.5,
+  collapseThreshold: 80,
+  expandThreshold: 120
 });
-document.addEventListener("mousemove", e => doDrag(e.clientX));
-document.addEventListener("mouseup", endDrag);
-
-// Touch events
-dragbar.addEventListener("touchstart", e => {
-  e.preventDefault();
-  startDrag(e.touches[0].clientX);
-}, { passive: false });
-
-document.addEventListener("touchmove", e => {
-  doDrag(e.touches[0].clientX);
-}, { passive: false });
-
-document.addEventListener("touchend", endDrag);
 
 // ---------------- Tree ----------------
 
