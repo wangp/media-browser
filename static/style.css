@@ -347,18 +347,16 @@ button.active:hover {
   top: 0;
   display: flex;
   align-items: center;
-  padding-bottom: 4px;
+  padding: 4px 8px;
   background: var(--bg-panel);
 }
 
 #thumbFilterGroup {
   display: flex;
   align-items: center;
-  flex: 1 1 auto;                   /* grow/shrink as needed */
-  max-width: calc(100% - 200px);    /* leave room for right group */
-  min-width: 120px;                 /* don't shrink too much */
-  margin: 0 auto;                   /* center by default */
-  padding: 4px 8px;
+  gap: 4px;
+  width: clamp(80px, 40vw, 306px);
+  padding: 2px 6px;
   box-sizing: border-box;
   background: var(--bg-panel-alt);
   border: 1px solid var(--border-main);
@@ -377,6 +375,7 @@ button.active:hover {
   border: none;
   outline: none;
   color: var(--text-main);
+  font-size: 14px;
   transition: color 0.2s ease;
 }
 
@@ -387,7 +386,6 @@ button.active:hover {
 }
 
 #thumbFilterClearBtn {
-  flex: 0 0 auto;
   width: 22px;
   height: 22px;
   padding: 0;
@@ -398,7 +396,6 @@ button.active:hover {
   font-size: 12px;
   cursor: pointer;
 
-  /* Initially hidden */
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.2s ease;
@@ -418,10 +415,21 @@ button.active:hover {
   background: var(--bg-btn-active);
 }
 
+#fileCountSpan {
+  margin-left: 4px;
+  padding: 2px 6px;
+  background: var(--bg-panel-alt);
+  color: var(--text-dim);
+  font-size: 13px;
+  white-space: nowrap;
+  user-select: none;
+}
+
 #thumbFilterBar .group.right-align {
+  margin-left: auto;
   display: flex;
-  flex: 0 0 auto;
   align-items: center;
+  gap: 6px;
   padding-right: 20px;
 }
 

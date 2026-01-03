@@ -58,6 +58,7 @@ const thumbZoomSlider = document.getElementById("thumbZoomSlider");
 const resetZoomBtn = document.getElementById("resetZoomBtn");
 const thumbFilterInput = document.getElementById("thumbFilterInput");
 const thumbFilterClearBtn = document.getElementById("thumbFilterClearBtn");
+const fileCountSpan = document.getElementById("fileCountSpan");
 
 const contextMenu = document.getElementById("contextMenu");
 const contextMenuItem = document.getElementById("contextMenuItem");
@@ -604,6 +605,7 @@ function renderGrid() {
 
   if (filteredItems.length === 0) {
     grid.replaceChildren(createNoMediaMsg());
+    updateFileCountSpan();
     return;
   }
 
@@ -696,6 +698,8 @@ function renderGrid() {
   visibleItems = accum;
 
   grid.replaceChildren(frag);
+
+  updateFileCountSpan();
 }
 
 function createNoMediaMsg() {
@@ -738,6 +742,20 @@ function createOrReuseThumb(item, existing, isVisible) {
   d.classList.toggle("hide-name", !showNames);
 
   return d;
+}
+
+function updateFileCountSpan() {
+  const m = visibleItems.length;
+  const n = gridSourceItems.length;
+
+  if (n == 0) {
+    fileCountSpan.textContent = "";
+    return;
+  }
+
+  let text = (m == n) ? `${n}` : `${m} / ${n}`;
+  text += (n == 1) ? " file" : " files";
+  fileCountSpan.textContent = text;
 }
 
 function thumbObserverCallback(entries, observer) {
@@ -823,6 +841,7 @@ function updateThumbsForFilterText() {
     thumbs.forEach(t => t.classList.remove("hide"));
     groupHeaders.forEach(hdr => hdr.classList.remove("hide"));
     visibleItems = gridSourceItems;
+    updateFileCountSpan();
     return;
   }
 
@@ -848,6 +867,7 @@ function updateThumbsForFilterText() {
   }
 
   visibleItems = accumItems;
+  updateFileCountSpan();
 
   return true;
 }
