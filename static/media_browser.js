@@ -1038,9 +1038,16 @@ contextMenu.addEventListener("click", async (e) => {
       break;
     }
     case "copy-path": {
+      const path = contextMenuSelectedItem._key;
       const copied = await copyToClipboard(path);
       const msg = copied ? "Copied to clipboard" : "Copied failed";
       showContextMenuMessage(msg, clickedItem);
+      break;
+    }
+    case "goto-dir": {
+      const dir = contextMenuSelectedItem._dir;
+      openAndLoadDir(dir);
+      hideContextMenu();
       break;
     }
   }
