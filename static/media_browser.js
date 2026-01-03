@@ -1029,13 +1029,20 @@ contextMenu.addEventListener("click", async (e) => {
 
   const action = clickedItem.dataset.action;
   switch (action) {
-    case "copy-link":
+    case "copy-link": {
       const path = contextMenuSelectedItem._key;
       const url = `${window.location.origin}/api/file?path=${encodeURIComponent(path)}`;
       const copied = await copyToClipboard(url);
       const msg = copied ? "Copied to clipboard" : "Copied failed";
       showContextMenuMessage(msg, clickedItem);
       break;
+    }
+    case "copy-path": {
+      const copied = await copyToClipboard(path);
+      const msg = copied ? "Copied to clipboard" : "Copied failed";
+      showContextMenuMessage(msg, clickedItem);
+      break;
+    }
   }
 });
 

@@ -442,7 +442,6 @@ button.active:hover {
   margin: 0;
   padding: 4px 0;
   list-style: none;
-  text-align: center;
   border-radius: var(--radius-sm);
   opacity: 0;
   pointer-events: none;
