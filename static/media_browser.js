@@ -234,6 +234,7 @@ function renderTreeNode(node) {
 
   // name span
   const nameSpan = document.createElement("span");
+  nameSpan.className = "dir-name";
   nameSpan.dataset.path = path;
   nameSpan.textContent = displayName;
   headerDiv.appendChild(nameSpan);

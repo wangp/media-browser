@@ -109,7 +109,7 @@ button.active:hover {
 #tree {
   width: 260px;
   min-width: 150px;
-  max-width: 50%;
+  max-width: 35%;
   background: var(--bg-panel-alt);
   border-right: 1px solid var(--border-main);
   overflow-y: auto;
@@ -174,8 +174,9 @@ button.active:hover {
 }
 
 .dir-header {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: 12px 1fr;
+  column-gap: 6px;
   padding: 2px 4px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -195,8 +196,7 @@ button.active:hover {
 }
 
 .dir-toggle {
-  width: 16px;
-  margin-right: 4px;
+  width: 12px;
   text-align: center;
   font-weight: bold;
   color: var(--text-dim);
@@ -207,8 +207,13 @@ button.active:hover {
   color: var(--text-main);
 }
 
+.dir-name {
+  margin-left: 6px;
+  text-indent: -6px;
+}
+
 .children {
-  margin: 2px 0 0 18px;
+  margin-left: 16px;
 }
 
 /* ================= Grid Content ================= */
