@@ -656,7 +656,7 @@ function renderGrid() {
       const groupItems = document.createElement("div");
       groupItems.className = "group-items";
       groups[dir].forEach(item => {
-        const isVisible = textMatchesFilterText(item._pathForFiltering);
+        const isVisible = lowerTextMatchesFilterTerms(item._pathForFiltering);
         const thumb = createOrReuseThumb(item, existing, isVisible);
         groupItems.appendChild(thumb);
         if (isVisible) {
@@ -684,7 +684,7 @@ function renderGrid() {
   } else {
     // Flat grid
     gridSourceItems.forEach(item => {
-      const isVisible = textMatchesFilterText(item._pathForFiltering);
+      const isVisible = lowerTextMatchesFilterTerms(item._pathForFiltering);
       const thumb = createOrReuseThumb(item, existing, isVisible);
       frag.appendChild(thumb);
       if (isVisible) {
@@ -823,19 +823,41 @@ function updateThumbSizes(value) {
 
 // ---------------- Filter thumbnails by name ----------------
 
-let filterText = "";
+let filterTerms = [];
 let filterTimeout = null;
 const DEBOUNCE_DELAY = 150; // ms
 
-function textMatchesFilterText(text) {
-  return filterText === "" || text.includes(filterText);
+function updateFilterTerms(text) {
+  const newTerms = text
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(t => t.length > 0);
+
+  const changed =
+    newTerms.length !== filterTerms.length ||
+    newTerms.some((t, i) => t !== filterTerms[i]);
+
+  if (changed) {
+    filterTerms = newTerms;
+    return true;
+  }
+
+  return false;
+}
+
+function lowerTextMatchesFilterTerms(lowerText) {
+  if (filterTerms.length === 0)
+    return true;
+
+  return filterTerms.every(term => lowerText.includes(term));
 }
 
 function updateThumbsForFilterText() {
   const thumbs = grid.querySelectorAll(".thumb");
   const groupHeaders = grid.querySelectorAll(".group-divider");
 
-  if (filterText === "") {
+  if (filterTerms.length === 0) {
     thumbs.forEach(t => t.classList.remove("hide"));
     groupHeaders.forEach(hdr => hdr.classList.remove("hide"));
     visibleItems = gridSourceItems;
@@ -848,7 +870,7 @@ function updateThumbsForFilterText() {
 
   for (const thumb of thumbs) {
     const item = thumb._item;
-    const match = item._pathForFiltering.includes(filterText);
+    const match = lowerTextMatchesFilterTerms(item._pathForFiltering);
     thumb.classList.toggle("hide", !match);
     if (match) {
       accumItems.push(item);
@@ -913,9 +935,8 @@ function handleThumbFilterInput({ scroll = true }) {
   clearTimeout(filterTimeout);
   filterTimeout = null;
 
-  const text = thumbFilterInput.value.trim().toLowerCase();
-  if (text === filterText) return;
-  filterText = text;
+  if (!updateFilterTerms(thumbFilterInput.value))
+    return;
 
   updateThumbsForFilterText();
   if (scroll)
