@@ -369,6 +369,10 @@ async function loadDir(newPath, { refresh = false, changeRecursiveMode = false }
 
     files.forEach(f => {
       const key = joinOsPaths(dir, f.name);
+      const dpath = decodeOsPathForDisplay(key);
+      const pathLower = dpath.toLowerCase();
+      const pathLowerNoAccents = removeAccents(pathLower);
+
       const item = {
         // The API gives us for each file:
         //    name
@@ -379,8 +383,9 @@ async function loadDir(newPath, { refresh = false, changeRecursiveMode = false }
 
         // We add these for each item:
         _dir: dir,
-        _key: key, // i.e. path
-        _pathForFiltering: decodeOsPathForDisplay(key).toLowerCase()
+        _key: key, // path to access file
+        _pathLower: pathLower, // only for filtering
+        _pathLowerNoAccents: pathLowerNoAccents
       };
       newItems.push(item);
     });
@@ -656,7 +661,7 @@ function renderGrid() {
       const groupItems = document.createElement("div");
       groupItems.className = "group-items";
       groups[dir].forEach(item => {
-        const isVisible = lowerTextMatchesFilterTerms(item._pathForFiltering);
+        const isVisible = itemMatchesFilter(item);
         const thumb = createOrReuseThumb(item, existing, isVisible);
         groupItems.appendChild(thumb);
         if (isVisible) {
@@ -684,7 +689,7 @@ function renderGrid() {
   } else {
     // Flat grid
     gridSourceItems.forEach(item => {
-      const isVisible = lowerTextMatchesFilterTerms(item._pathForFiltering);
+      const isVisible = itemMatchesFilter(item);
       const thumb = createOrReuseThumb(item, existing, isVisible);
       frag.appendChild(thumb);
       if (isVisible) {
@@ -827,30 +832,50 @@ let filterTerms = [];
 let filterTimeout = null;
 const DEBOUNCE_DELAY = 150; // ms
 
-function updateFilterTerms(text) {
-  const newTerms = text
+function removeAccents(str) {
+  let r = str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return (r === str) ? str : r;
+}
+
+function updateFilterTerms(input) {
+  const newTerms = input
     .trim()
-    .toLowerCase()
     .split(/\s+/)
-    .filter(t => t.length > 0);
+    .filter(Boolean)
+    .map(term => {
+      const lower = term.toLowerCase();
+      const stripped = removeAccents(lower);
+      // User typed no accents: ignore accents when matching.
+      // User typed with accents: require exact match with accents.
+      const ignoreAccents = (lower === stripped);
+      return {
+        str: ignoreAccents ? stripped : lower,
+        ignoreAccents: ignoreAccents
+      };
+    });
 
   const changed =
     newTerms.length !== filterTerms.length ||
-    newTerms.some((t, i) => t !== filterTerms[i]);
+    newTerms.some((t, i) => {
+      const old = filterTerms[i];
+      return !old || t.str !== old.str || t.ignoreAccents !== old.ignoreAccents;
+    });
 
-  if (changed) {
+  if (changed)
     filterTerms = newTerms;
-    return true;
-  }
 
-  return false;
+  return changed;
 }
 
-function lowerTextMatchesFilterTerms(lowerText) {
+function itemMatchesFilter(item) {
   if (filterTerms.length === 0)
     return true;
 
-  return filterTerms.every(term => lowerText.includes(term));
+  return filterTerms.every(term => {
+    return term.ignoreAccents
+      ? item._pathLowerNoAccents.includes(term.str)
+      : item._pathLower.includes(term.str);
+  });
 }
 
 function updateThumbsForFilterText() {
@@ -870,7 +895,7 @@ function updateThumbsForFilterText() {
 
   for (const thumb of thumbs) {
     const item = thumb._item;
-    const match = lowerTextMatchesFilterTerms(item._pathForFiltering);
+    const match = itemMatchesFilter(item);
     thumb.classList.toggle("hide", !match);
     if (match) {
       accumItems.push(item);
