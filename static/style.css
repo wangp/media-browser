@@ -179,6 +179,7 @@ button.active:hover {
   padding: 2px 4px;
   border-radius: var(--radius-sm);
   cursor: pointer;
+  transition: background 0.2s;
 }
 
 .dir-header:hover {
