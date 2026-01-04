@@ -578,31 +578,6 @@ async function refreshDir() {
 
 refreshBtn.addEventListener("click", refreshDir);
 
-// ---------------- Breadcrumbs ----------------
-
-function updateBreadcrumbs(pathStr) {
-  const segments = pathStr.split("/");
-  const displaySegments = decodeOsPathForDisplay(pathStr).split("/");
-
-  const fragment = document.createDocumentFragment();
-
-  for (let i = 0; i < segments.length; i++) {
-    const pathto = segments.slice(0, i + 1).join("/");
-    const label = displaySegments[i];
-
-    const span = document.createElement("span");
-    span.className = "breadcrumb-segment";
-    span.dataset.path = pathto;
-    span.textContent = label;
-
-    span.addEventListener("click", () => openAndLoadDir(pathto));
-
-    fragment.appendChild(span);
-  }
-
-  breadcrumbDiv.replaceChildren(fragment);
-}
-
 // ---------------- Item helpers ----------------
 
 function itemMatchesMediaType(item) {
@@ -1120,6 +1095,31 @@ function updateFileCountSpan(m, n) {
   let text = (m == n) ? `${n}` : `${m} / ${n}`;
   text += (n == 1) ? " file" : " files";
   fileCountSpan.textContent = text;
+}
+
+// ---------------- Breadcrumbs ----------------
+
+function updateBreadcrumbs(pathStr) {
+  const segments = pathStr.split("/");
+  const displaySegments = decodeOsPathForDisplay(pathStr).split("/");
+
+  const fragment = document.createDocumentFragment();
+
+  for (let i = 0; i < segments.length; i++) {
+    const pathto = segments.slice(0, i + 1).join("/");
+    const label = displaySegments[i];
+
+    const span = document.createElement("span");
+    span.className = "breadcrumb-segment";
+    span.dataset.path = pathto;
+    span.textContent = label;
+
+    span.addEventListener("click", () => openAndLoadDir(pathto));
+
+    fragment.appendChild(span);
+  }
+
+  breadcrumbDiv.replaceChildren(fragment);
 }
 
 // ---------------- Context menu ----------------
