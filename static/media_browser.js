@@ -364,6 +364,12 @@ class DirTree {
   constructor(treeEl) {
     this.treeEl = treeEl;
     this.openDirs = Object.create(null); // tracks open/closed state
+
+    // Hook
+    this.onSelect = null;
+
+    // Bind actions
+    this.treeEl.addEventListener("click", (e) => this._handleClick(e));
   }
 
   render(treeData, selectedPath) {
@@ -387,22 +393,17 @@ class DirTree {
     // container
     const dirDiv = document.createElement("div");
     dirDiv.className = "dir";
+    dirDiv.dataset.path = path;
 
     // header
     const headerDiv = document.createElement("div");
     headerDiv.className = "dir-header" + (isSelected ? " selected" : "");
-    headerDiv.addEventListener("click", () => this.onSelect?.(path));
 
     // toggle button
     const toggleBtn = document.createElement("span");
     toggleBtn.className = "dir-toggle";
-
     if (node.dirs.length > 0) {
       toggleBtn.textContent = isOpen ? "−" : "+";
-      toggleBtn.addEventListener("click", e => {
-        e.stopPropagation();
-        this.toggleOpenDir(path);
-      });
     } else {
       toggleBtn.textContent = "•";
     }
@@ -411,7 +412,6 @@ class DirTree {
     // name span
     const nameSpan = document.createElement("span");
     nameSpan.className = "dir-name";
-    nameSpan.dataset.path = path;
     nameSpan.textContent = displayName;
     headerDiv.appendChild(nameSpan);
 
@@ -436,29 +436,15 @@ class DirTree {
     this.highlightDir(path);
   }
 
-  toggleOpenDir(path) {
-    const isOpen = !this.openDirs[path];
-    this.openDirs[path] = isOpen;
-
-    const span = this.treeEl.querySelector(`.dir-header span[data-path='${path}']`);
-    if (!span) return;
-
-    const childrenDiv = span.parentElement.parentElement.querySelector(".children");
-    if (!childrenDiv) return;
-
-    childrenDiv.style.display = isOpen ? "block" : "none";
-    span.previousElementSibling.textContent = isOpen ? "−" : "+";
-  }
-
   highlightDir(path) {
     this._openAncestors(path);
 
     const prev = this.treeEl.querySelector(".dir-header.selected");
     if (prev) prev.classList.remove("selected");
 
-    const node = this.treeEl.querySelector(`.dir-header span[data-path='${path}']`);
-    if (!node) return;
-    const header = node.parentElement;
+    const dir = this.treeEl.querySelector(`.dir[data-path='${path}']`);
+    if (!dir) return;
+    const header = dir.querySelector(".dir-header");
     header.classList.add("selected");
 
     // Flash animation
@@ -482,15 +468,44 @@ class DirTree {
   }
 
   _syncOpenStates() {
-    this.treeEl.querySelectorAll(".dir-header span[data-path]").forEach(span => {
-      const path = span.dataset.path;
-      const childrenDiv = span.parentElement.parentElement.querySelector(".children");
+    this.treeEl.querySelectorAll(".dir[data-path]").forEach(dir => {
+      const path = dir.dataset.path;
+      const childrenDiv = dir.querySelector(".children");
       if (!childrenDiv) return;
 
       const isOpen = this.openDirs[path];
+      // TODO simplify using css
       childrenDiv.style.display = isOpen ? "block" : "none";
-      span.previousElementSibling.textContent = isOpen ? "−" : "+";
+      const toggleBtn = dir.querySelector(".dir-toggle");
+      toggleBtn.textContent = isOpen ? "−" : "+";
     });
+  }
+
+  _toggleOpen(dirDiv, toggleBtn, path) {
+    const isOpen = !this.openDirs[path];
+    this.openDirs[path] = isOpen;
+
+    const childrenDiv = dirDiv.querySelector(".children");
+    if (!childrenDiv) return;
+
+    childrenDiv.style.display = isOpen ? "block" : "none";
+    toggleBtn.textContent = isOpen ? "−" : "+";
+  }
+
+  _handleClick(e) {
+    const header = e.target.closest(".dir-header");
+    if (!header) return;
+
+    const dirDiv = header.parentElement;
+    const path = dirDiv.dataset.path;
+
+    const toggleBtn = e.target.closest(".dir-toggle");
+    if (toggleBtn) {
+      this._toggleOpen(dirDiv, toggleBtn, path);
+    } else {
+      this.highlightDir(path);
+      this.onSelect?.(path);
+    }
   }
 }
 
