@@ -519,6 +519,54 @@ button.active:hover {
   100% { transform: scale(1); opacity: 1; }
 }
 
+/* ================= Tooltip ================= */
+
+.tooltip {
+  position: fixed;
+  pointer-events: none;
+  z-index: 1000;
+  background: var(--bg-menu-item);
+  color: var(--text-main);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent-muted);
+  line-height: 1.25;
+  opacity: 0;
+  transform: translateY(0);
+  transition: opacity 0.2s ease, left 0.05s ease, top 0.05s ease;
+}
+
+.tooltip.show {
+  opacity: 1;
+}
+
+.tooltip table {
+  border-collapse: collapse;
+}
+
+.tooltip td {
+  padding: 2px 6px;
+  vertical-align: top;
+}
+
+.tooltip td.label {
+  font-weight: bold;
+  text-align: right;
+  padding-right: 10px;
+  white-space: nowrap;
+}
+
+.tooltip td.value {
+  text-align: left;
+}
+
+.tooltip td.wrap {
+  max-width: 40ch;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 /* ================= Viewer ================= */
 
 #viewer {

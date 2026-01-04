@@ -1136,6 +1136,8 @@ function isContextMenuActive() {
 }
 
 function showContextMenu(x, y) {
+  if (tooltip) tooltip.hideTooltip();
+
   contextMenu.style.top = `${y}px`;
   contextMenu.style.left = `${x}px`;
   contextMenu.classList.remove("show-msg");
@@ -1223,6 +1225,204 @@ document.addEventListener("keydown", e => {
     hideContextMenu();
 });
 
+// ---------------- Tooltip ----------------
+
+class Tooltip {
+  constructor(container, selector, options = {}) {
+    this.container = container;
+    this.selector = selector;
+    this.showDelay = options.showDelay ?? 1000;
+    this.hideDelay = options.hideDelay ?? 250;
+    this.switchDelay = options.switchDelay ?? 250;
+    this.getContent = options.getContent ?? (() => "(no content)");
+
+    this.tooltip = document.createElement("div");
+    this.tooltip.className = "tooltip";
+    document.body.appendChild(this.tooltip);
+
+    this.hoverEl = null;    // element currently under cursor
+    this.tooltipEl = null;  // element currently displayed in tooltip
+    this.tooltipVisible = false;
+
+    this.showTimer = null;
+    this.hideTimer = null;
+
+    this.attachEvents();
+  }
+
+  showTooltip(el, event) {
+    if (isContextMenuActive()) return;
+
+    this.tooltipEl = el;
+    this.tooltip.innerHTML = this.getContent(el);
+
+    const margin = 12;
+    const elRect = el.getBoundingClientRect();
+
+    // Make tooltip measurable
+    this.tooltip.style.left = "0px";
+    this.tooltip.style.top = "0px";
+    this.tooltip.classList.add("show");
+    const tipRect = this.tooltip.getBoundingClientRect();
+
+    const placements = [
+      // right
+      {
+        x: elRect.right + margin,
+        y: elRect.top + (elRect.height - tipRect.height) / 2
+      },
+      // left
+      {
+        x: elRect.left - tipRect.width - margin,
+        y: elRect.top + (elRect.height - tipRect.height) / 2
+      },
+      // bottom
+      {
+        x: elRect.left + (elRect.width - tipRect.width) / 2,
+        y: elRect.bottom + margin
+      },
+      // top
+      {
+        x: elRect.left + (elRect.width - tipRect.width) / 2,
+        y: elRect.top - tipRect.height - margin
+      }
+    ];
+
+    let placed = false;
+    let x = 0, y = 0;
+
+    for (const p of placements) {
+      const px = Math.round(p.x);
+      const py = Math.round(p.y);
+      if (
+        px >= 0 &&
+        py >= 0 &&
+        px + tipRect.width <= window.innerWidth &&
+        py + tipRect.height <= window.innerHeight
+      ) {
+        x = px;
+        y = py;
+        placed = true;
+        break;
+      }
+    }
+
+    // Fallback: cursor-based, but offset away from the element
+    if (!placed) {
+      x = event.clientX + margin;
+      y = event.clientY + margin;
+      if (x + tipRect.width > window.innerWidth)
+        x = event.clientX - tipRect.width - margin;
+      if (y + tipRect.height > window.innerHeight)
+        y = event.clientY - tipRect.height - margin;
+    }
+
+    this.tooltip.style.left = `${x}px`;
+    this.tooltip.style.top = `${y}px`;
+
+    if (!this.tooltipVisible) {
+      this.tooltip.style.opacity = "0";
+      requestAnimationFrame(() => {
+        this.tooltip.style.opacity = "1";
+        this.tooltipVisible = true;
+      });
+    }
+  }
+
+  hideTooltip() {
+    this.tooltip.style.opacity = "0";
+    this.tooltipVisible = false;
+    this.tooltipEl = null;
+  }
+
+  attachEvents() {
+    this.container.addEventListener("mouseover", e => {
+      const el = e.target.closest(this.selector);
+      if (!el) return;
+
+      this.hoverEl = el;
+
+      if (this.hideTimer) {
+        clearTimeout(this.hideTimer);
+        this.hideTimer = null;
+      }
+
+      const delay = this.tooltipVisible ? this.switchDelay : this.showDelay;
+
+      if (this.showTimer)
+        clearTimeout(this.showTimer);
+      this.showTimer = setTimeout(() => {
+        if (this.hoverEl === el)
+          this.showTooltip(el, e);
+      }, delay);
+    });
+
+    this.container.addEventListener("mouseout", e => {
+      const fromEl = e.target.closest(this.selector);
+      const toEl = e.relatedTarget?.closest?.(this.selector);
+
+      if (!fromEl || fromEl === toEl) return;
+
+      this.hoverEl = null;
+
+      if (this.showTimer) {
+        clearTimeout(this.showTimer);
+        this.showTimer = null;
+      }
+
+      if (this.tooltipVisible) {
+        if (this.hideTimer) clearTimeout(this.hideTimer);
+        this.hideTimer = setTimeout(() => this.hideTooltip(), this.hideDelay);
+      }
+    });
+  }
+}
+
+const tooltip = new Tooltip(grid, ".thumb", {
+  showDelay: 1000,
+  hideDelay: 250,
+  switchDelay: 250,
+  getContent: el => {
+    const item = el._item;
+    if (!item) return null;
+    return renderItemTooltip(item);
+  }
+});
+
+function renderItemTooltip(item) {
+  const itemName = decodeOsPathForDisplay(item.name);
+  const itemDir = decodeOsPathForDisplay(item._dir);
+
+  return `<table>
+    <tr><td class="label">Name:</td><td class="value wrap">${itemName}</td></tr>
+    <tr><td class="label">Directory:</td><td class="value wrap">${itemDir}</td></tr>
+    <tr><td class="label">Modified:</td><td class="value">${formatDateTime(item.mtime)}</td></tr>
+    <tr><td class="label">Size:</td><td class="value">${formatBytes(item.size)}</td></tr>
+  </table>`;
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return "0 B";
+  if (bytes < 1024) return bytes + " B";
+  let kb = bytes / 1024;
+  if (kb < 1024) return kb.toFixed(1) + " KB";
+  let mb = kb / 1024;
+  if (mb < 1024) return mb.toFixed(1) + " MB";
+  let gb = mb / 1024;
+  return gb.toFixed(1) + " GB";
+}
+
+function formatDateTime(dateInput) {
+  if (!dateInput) return "(unknown)";
+  const d = typeof dateInput === "number" && dateInput < 1e12
+    ? new Date(dateInput * 1000)
+    : new Date(dateInput);
+
+  const pad = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ` +
+         `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 // ---------------- Viewer ----------------
 
 function isViewerActive() {
@@ -1249,6 +1449,8 @@ function openViewer(item) {
 }
 
 async function showItem(item) {
+  if (tooltip) tooltip.hideTooltip();
+
   viewerTitleEl.textContent = decodeOsPathForDisplay(item.name);
 
   // Cancel previous video if any
