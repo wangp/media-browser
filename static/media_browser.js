@@ -2,7 +2,6 @@
 
 let treeData = null;
 let currentPath = "";
-const openDirs = {};    // open/closed state in dir tree
 const dirCache = new Map(); // path -> { mtime, files }
 
 let allItems = [];
@@ -240,153 +239,18 @@ async function loadTree() {
     return;
   }
 
-  const fragment = document.createDocumentFragment();
-
-  treeData.dirs.forEach(d => {
-    openDirs[d.path] = true; // automatically open first level
-    fragment.appendChild(renderTreeNode(d));
-  });
-
-  tree.replaceChildren(fragment);
-}
-
-function renderTreeNode(node) {
-  const path = node.path;
-  const displayName = decodeOsPathForDisplay(node.name);
-
-  const isOpen = openDirs[path] ?? false;
-  openDirs[path] = isOpen;
-
-  const isSelected = (path === currentPath);
-
-  // container for this node
-  const dirDiv = document.createElement("div");
-  dirDiv.className = "dir";
-
-  // header
-  const headerDiv = document.createElement("div");
-  headerDiv.className = "dir-header" + (isSelected ? " selected" : "");
-  headerDiv.addEventListener("click", () => openAndLoadDir(path));
-
-  // toggle button
-  const toggleBtn = document.createElement("span");
-  toggleBtn.className = "dir-toggle";
-
-  if (node.dirs.length > 0) {
-    toggleBtn.textContent = (isOpen) ? "−" : "+";
-    toggleBtn.addEventListener("click", e => {
-      e.stopPropagation();
-      toggleOpenDir(path);
-    });
-  } else {
-    toggleBtn.textContent = "•";
-  }
-
-  headerDiv.appendChild(toggleBtn);
-
-  // name span
-  const nameSpan = document.createElement("span");
-  nameSpan.className = "dir-name";
-  nameSpan.dataset.path = path;
-  nameSpan.textContent = displayName;
-  headerDiv.appendChild(nameSpan);
-
-  dirDiv.appendChild(headerDiv);
-
-  // children container
-  if (node.dirs.length > 0) {
-    const childrenDiv = document.createElement("div");
-    childrenDiv.className = "children";
-    childrenDiv.style.display = isOpen ? "block" : "none";
-
-    node.dirs.forEach(child => {
-      childrenDiv.appendChild(renderTreeNode(child));
-    });
-
-    dirDiv.appendChild(childrenDiv);
-  }
-
-  return dirDiv;
-}
-
-function openAncestorDirs(dirPath) {
-  const parts = dirPath.split("/");
-  let acc = "";
-  for (let i = 0; i < parts.length - 1; i++) {
-    acc = acc ? `${acc}/${parts[i]}` : parts[i];
-    openDirs[acc] = true;
-  }
-}
-
-function syncOpenTreeDirs() {
-  tree.querySelectorAll(".dir-header span[data-path]").forEach(span => {
-    const path = span.dataset.path;
-    const childrenDiv = span.parentElement.parentElement.querySelector(".children");
-    if (!childrenDiv) return;
-
-    const isOpen = openDirs[path];
-    childrenDiv.style.display = (isOpen) ? "block" : "none";
-    span.previousElementSibling.textContent = (isOpen) ? "−" : "+";
-  });
-}
-
-function highlightTreeDir(newPath) {
-  const prev = tree.querySelector(".dir-header.selected");
-
-  // Open ancestors of the selected path
-  openAncestorDirs(newPath);
-  syncOpenTreeDirs();
-
-  const newNode = tree.querySelector(
-    `.dir-header span[data-path='${newPath}']`
-  );
-  if (!newNode) return;
-
-  const header = newNode.parentElement;
-
-  if (prev && prev !== header) {
-    prev.classList.remove("selected");
-  }
-
-  header.classList.add("selected");
-
-  // Trigger flash animation
-  if (prev === header) {
-    header.classList.remove("flash");
-    void header.offsetWidth;
-    header.classList.add("flash");
-  }
-
-  header.scrollIntoView({
-    block: "nearest",
-    inline: "nearest"
-  });
+  dirTree.render(treeData, currentPath);
 }
 
 function openAndLoadDir(path) {
   if (path === currentPath) {
-    highlightTreeDir(path);
+    dirTree.highlightDir(path);
     return;
   }
 
   loadDir(path);
-  openDirs[path] = true;
-  highlightTreeDir(path);
+  dirTree.openAndHighlightDir(path);
   grid.schedScrollToNextVisibleThumb();
-}
-
-function toggleOpenDir(p) {
-  const isOpen = !openDirs[p];
-  openDirs[p] = isOpen;
-
-  const span = tree.querySelector(`.dir-header span[data-path='${p}']`);
-  if (!span) return;
-
-  const childrenDiv = span.parentElement.parentElement.querySelector(".children");
-  if (!childrenDiv) return;
-
-  childrenDiv.style.display = (isOpen) ? "block" : "none";
-  span.previousElementSibling.textContent = (isOpen) ? "−" : "+";
 }
 
 async function loadDir(newPath, { refresh = false, changeRecursiveMode = false } = {}) {
@@ -493,6 +357,148 @@ function findTreeNode(path, node) {
   }
   return null;
 }
+
+// ---------------- DirTree (view) ----------------
+
+class DirTree {
+  constructor(treeEl) {
+    this.treeEl = treeEl;
+    this.openDirs = Object.create(null); // tracks open/closed state
+  }
+
+  render(treeData, selectedPath) {
+    const fragment = document.createDocumentFragment();
+    treeData.dirs.forEach(d => {
+      this.openDirs[d.path] = true; // auto-open first level
+      fragment.appendChild(this._renderNode(d, selectedPath));
+    });
+    this.treeEl.replaceChildren(fragment);
+  }
+
+  _renderNode(node, selectedPath) {
+    const path = node.path;
+    const displayName = decodeOsPathForDisplay(node.name);
+
+    const isOpen = this.openDirs[path] ?? false;
+    this.openDirs[path] = isOpen;
+
+    const isSelected = (path === selectedPath);
+
+    // container
+    const dirDiv = document.createElement("div");
+    dirDiv.className = "dir";
+
+    // header
+    const headerDiv = document.createElement("div");
+    headerDiv.className = "dir-header" + (isSelected ? " selected" : "");
+    headerDiv.addEventListener("click", () => this.onSelect?.(path));
+
+    // toggle button
+    const toggleBtn = document.createElement("span");
+    toggleBtn.className = "dir-toggle";
+
+    if (node.dirs.length > 0) {
+      toggleBtn.textContent = isOpen ? "−" : "+";
+      toggleBtn.addEventListener("click", e => {
+        e.stopPropagation();
+        this.toggleOpenDir(path);
+      });
+    } else {
+      toggleBtn.textContent = "•";
+    }
+    headerDiv.appendChild(toggleBtn);
+
+    // name span
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "dir-name";
+    nameSpan.dataset.path = path;
+    nameSpan.textContent = displayName;
+    headerDiv.appendChild(nameSpan);
+
+    dirDiv.appendChild(headerDiv);
+
+    // children
+    if (node.dirs.length > 0) {
+      const childrenDiv = document.createElement("div");
+      childrenDiv.className = "children";
+      childrenDiv.style.display = isOpen ? "block" : "none";
+      node.dirs.forEach(child => {
+        childrenDiv.appendChild(this._renderNode(child, selectedPath));
+      });
+      dirDiv.appendChild(childrenDiv);
+    }
+
+    return dirDiv;
+  }
+
+  openAndHighlightDir(path) {
+    this.openDirs[path] = true;
+    this.highlightDir(path);
+  }
+
+  toggleOpenDir(path) {
+    const isOpen = !this.openDirs[path];
+    this.openDirs[path] = isOpen;
+
+    const span = this.treeEl.querySelector(`.dir-header span[data-path='${path}']`);
+    if (!span) return;
+
+    const childrenDiv = span.parentElement.parentElement.querySelector(".children");
+    if (!childrenDiv) return;
+
+    childrenDiv.style.display = isOpen ? "block" : "none";
+    span.previousElementSibling.textContent = isOpen ? "−" : "+";
+  }
+
+  highlightDir(path) {
+    this._openAncestors(path);
+
+    const prev = this.treeEl.querySelector(".dir-header.selected");
+    if (prev) prev.classList.remove("selected");
+
+    const node = this.treeEl.querySelector(`.dir-header span[data-path='${path}']`);
+    if (!node) return;
+    const header = node.parentElement;
+    header.classList.add("selected");
+
+    // Flash animation
+    if (prev === header) {
+      header.classList.remove("flash");
+      void header.offsetWidth;
+      header.classList.add("flash");
+    }
+
+    header.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+
+  _openAncestors(path) {
+    const parts = path.split("/");
+    let acc = "";
+    for (let i = 0; i < parts.length - 1; i++) {
+      acc = acc ? `${acc}/${parts[i]}` : parts[i];
+      this.openDirs[acc] = true;
+    }
+    this._syncOpenStates();
+  }
+
+  _syncOpenStates() {
+    this.treeEl.querySelectorAll(".dir-header span[data-path]").forEach(span => {
+      const path = span.dataset.path;
+      const childrenDiv = span.parentElement.parentElement.querySelector(".children");
+      if (!childrenDiv) return;
+
+      const isOpen = this.openDirs[path];
+      childrenDiv.style.display = isOpen ? "block" : "none";
+      span.previousElementSibling.textContent = isOpen ? "−" : "+";
+    });
+  }
+}
+
+const dirTree = new DirTree(tree);
+
+dirTree.onSelect = (path) => {
+  openAndLoadDir(path);
+};
 
 // ---------------- Top bar buttons ----------------
 
