@@ -12,7 +12,6 @@ let groupOrder = [];
 let groupOpen = {};     // open/closed state of groups in grid
 let gridSourceItems = []; // flattened and sorted
 let visibleItems = [];  // after filter by name
-let navIndex = 0;       // index into visibleItems
 
 let sortType = "name";  // name | mtime | size
 let sortAscending = true;
@@ -22,18 +21,6 @@ let groupByDir = true;
 let showNames = true;
 
 const DEFAULT_THUMB_ZOOM = 180; // px
-
-let shuffleEnabled = false;
-let shuffleOrder = null;   // array of indices into navOrder[]
-
-let currentHls = null;
-let viewerControlsVisible = false;
-let viewerAllowClick = true;
-let viewerFullscreenEntered = false;
-
-let hideTimer = null;
-let slideTimer = null;
-let toastTimer = null;
 
 // UI elements
 const topbar = document.getElementById("topbar");
@@ -59,19 +46,6 @@ const resetZoomBtn = document.getElementById("resetZoomBtn");
 const thumbFilterInput = document.getElementById("thumbFilterInput");
 const thumbFilterClearBtn = document.getElementById("thumbFilterClearBtn");
 const fileCountSpan = document.getElementById("fileCountSpan");
-
-const viewerEl = document.getElementById("viewer");
-const viewerTitleEl = document.getElementById("viewerTitle");
-const viewerImg = document.getElementById("viewerImg");
-const viewerVideo = document.getElementById("viewerVideo");
-
-const shuffleBtn = document.getElementById("shuffleBtn");
-const slideBtn = document.getElementById("slideBtn");
-const fullscreenBtn = document.getElementById("fullscreenBtn");
-const closeViewerBtn = document.getElementById("closeViewerBtn");
-const navLeftEl = document.getElementById("navLeft");
-const navRightEl = document.getElementById("navRight");
-const toastEl = document.getElementById("toast");
 
 const thumbObserver = new IntersectionObserver(thumbObserverCallback,
   {root: grid, rootMargin: "200px"});
@@ -887,7 +861,7 @@ grid.addEventListener("click", (e) => {
   if (!img) return;
   const placeholder = img.parentElement;
   const item = placeholder.item;
-  if (item) openViewer(item);
+  if (item) viewer.openItem(item, visibleItems);
 });
 
 // ---------------- Thumbnail Zoom ----------------
@@ -1461,569 +1435,540 @@ function formatDateTime(dateInput) {
 
 // ---------------- Viewer ----------------
 
-function isViewerActive() {
-  return viewerEl.style.display === "block";
-}
+class Viewer {
+  constructor() {
+    // DOM elements
+    this.viewerEl = document.getElementById("viewer");
+    this.viewerImg = this.viewerEl.querySelector("img");
+    this.viewerVideo = this.viewerEl.querySelector("video");
+    this.viewerTitleEl = this.viewerEl.querySelector(".viewer-title");
+    this.toastEl = document.getElementById("toast");
 
-function openViewer(item) {
-  const idx = visibleItems.findIndex(vi => vi._key === item._key);
-  if (idx === -1) {
-    console.warn("Item not in visibleItems, cannot open:", item);
-    return;
+    this.navLeftEl = this.viewerEl.querySelector(".viewer-nav.left");
+    this.navRightEl = this.viewerEl.querySelector(".viewer-nav.right");
+    this.closeViewerBtn = this.viewerEl.querySelector(".close-btn");
+    this.shuffleBtn = this.viewerEl.querySelector(".shuffle-btn");
+    this.slideBtn = this.viewerEl.querySelector(".slide-btn");
+    this.fullscreenBtn = this.viewerEl.querySelector(".fullscreen-btn");
+
+    // State
+    this.navItems = [];
+    this.navIndex = 0;
+    this.shuffleEnabled = false;
+    this.shuffleOrder = null;
+    this.currentHls = null;
+    this.slideTimer = null;
+    this.viewerControlsVisible = false;
+    this.viewerFullscreenEntered = false;
+    this.toastTimer = null;
+
+    // Mouse & touch tracking
+    this.lastMouseX = null;
+    this.lastMouseY = null;
+    this.mousemoveAccum = 0;
+    this.wheelAccum = 0;
+    this.touchStartX = 0;
+    this.touchStartY = 0;
+    this.touchActive = false;
+
+    this.bindUI();
   }
 
-  navIndex = idx;
-  if (shuffleEnabled) {
-    makeShuffleOrder(navIndex);
-  } else {
-    shuffleOrder = null;
+  // ---------------- Viewer State ----------------
+
+  isActive() {
+    return this.viewerEl.style.display === "block";
   }
 
-  viewerEl.style.display = "block";
-  hideViewerControls();
-  showItem(visibleItems[navIndex]);
-}
-
-async function showItem(item) {
-  if (tooltip) tooltip.hideTooltip();
-
-  viewerTitleEl.textContent = decodeOsPathForDisplay(item.name);
-
-  // Cancel previous video if any
-  viewerVideo.pause();
-  viewerVideo.removeAttribute("src");
-  viewerVideo.load();
-
-  // Destroy previous HLS instance if any
-  if (currentHls) {
-    currentHls.destroy();
-    currentHls = null;
-  }
-
-  if (item.type === "video") {
-    showVideoItem(item);
-  } else {
-    // Hide video
-    viewerVideo.style.display = "none";
-
-    // Show image
-    const itemPath = item._key;
-    viewerImg.src = `/api/file?path=${encodeURIComponent(itemPath)}`;
-    viewerImg.style.display = "block";
-  }
-}
-
-async function showVideoItem(item) {
-  viewerImg.style.display = "none";
-  viewerVideo.style.display = "block";
-
-  const itemPath = item._key;
-  const ext = item.name.split(".").pop().toLowerCase();
-
-  const commonExts = ["mp4", "m4v", "webm", "ogg", "ogv", "mkv"];
-
-  if (commonExts.includes(ext)) {
-    try {
-      viewerVideo.src = `/api/file?path=${encodeURIComponent(itemPath)}`;
-      await viewerVideo.play();
-      return; // native playback succeeded
-    } catch (e) {
-      console.warn("Native playback failed, falling back to HLS:", e);
-    }
-  }
-
-  try {
-    const res = await fetch(`/api/start_hls?path=${encodeURIComponent(itemPath)}`);
-    const data = await res.json();
-    if (!data.playlist) {
-      console.error(data.error || "No playlist returned");
-      showToast("No playlist returned", 3000);
+  openItem(item, navItems) {
+    const idx = navItems.findIndex(vi => vi._key === item._key);
+    if (idx === -1) {
+      console.warn("Item not in navItems:", item);
       return;
     }
 
-    let hlsStarted = false;
-    if (viewerVideo.canPlayType("application/vnd.apple.mpegurl")) {
-      viewerVideo.src = data.playlist;
-      await viewerVideo.play();
-      hlsStarted = true;
-    } else if (window.Hls && window.Hls.isSupported()) {
-      currentHls = new Hls();
-      currentHls.loadSource(data.playlist);
-      currentHls.attachMedia(viewerVideo);
-      currentHls.on(Hls.Events.MANIFEST_PARSED, () => viewerVideo.play());
-      hlsStarted = true;
+    this.navItems = navItems;
+    this.navIndex = idx;
+
+    if (this.shuffleEnabled) {
+      this.makeShuffleOrder(this.navIndex);
     } else {
-      showToast("Hls.js not loaded, cannot play HLS video", 3000);
+      this.shuffleOrder = null;
     }
 
-    if (hlsStarted) {
-      showToast("HLS playback");
+    this.viewerEl.style.display = "block";
+    this.hideViewerControls();
+    this.showItem(this.navItems[this.navIndex]);
+  }
+
+  close() {
+    this.disarmSlideTimer();
+    this.updateSlideBtn();
+    this.hideViewerControls();
+
+    this.viewerEl.style.display = "none";
+
+    // Stop video
+    this.viewerVideo.pause();
+    this.viewerVideo.removeAttribute("src");
+    this.viewerVideo.load();
+    this.viewerVideo.style.display = "none";
+
+    if (this.currentHls) {
+      this.currentHls.destroy();
+      this.currentHls = null;
     }
-  } catch (e) {
-    console.error("Failed to start HLS stream", e);
-    showToast("Failed to start HLS stream: " + e.message, 3000);
-  }
-}
 
-function makeShuffleOrder(anchorIdx) {
-  shuffleOrder = visibleItems.map((_, i) => i);
+    // Hide image
+    this.viewerImg.style.display = "none";
+    this.viewerImg.removeAttribute("src");
 
-  // Remove anchor and put it first
-  if (anchorIdx >= 0 && anchorIdx < visibleItems.length) {
-    shuffleOrder.splice(shuffleOrder.indexOf(anchorIdx), 1);
-    shuffleOrder.unshift(anchorIdx);
-  }
+    this.toastEl.classList.remove("show");
 
-  // Fisher–Yates shuffle starting from index 1 to keep anchor first
-  for (let i = 1; i < shuffleOrder.length; i++) {
-    const j = i + Math.floor(Math.random() * (shuffleOrder.length - i));
-    [shuffleOrder[i], shuffleOrder[j]] = [shuffleOrder[j], shuffleOrder[i]];
-  }
-}
-
-function viewerNav(d) {
-  if (visibleItems.length < 2)
-    return;
-
-  if (shuffleEnabled) {
-    const i = shuffleOrder.indexOf(navIndex);
-    const j = (i + d + shuffleOrder.length) % shuffleOrder.length;
-    navIndex = shuffleOrder[j];
-  } else {
-    navIndex = (navIndex + d + visibleItems.length) % visibleItems.length;
+    // Exit fullscreen only if viewer itself triggered it
+    if (this.viewerFullscreenEntered && document.fullscreenElement === this.viewerEl) {
+      document.exitFullscreen?.();
+    }
+    this.viewerFullscreenEntered = false;
   }
 
-  showItem(visibleItems[navIndex]);
-}
+  // ---------------- Item Display ----------------
 
-function manualAdvance(d, showUI) {
-  viewerNav(d);
+  async showItem(item) {
+    if (tooltip) tooltip.hideTooltip();
 
-  if (slideTimer)
-    armSlideTimer(); // reset countdown
+    this.viewerTitleEl.textContent = decodeOsPathForDisplay(item.name);
 
-  if (showUI) {
-    showViewerControls();
-    clearTimeout(hideTimer);
-    hideTimer = setTimeout(hideViewerControls, 1000);
-  }
+    // Cancel previous video if any
+    this.viewerVideo.pause();
+    this.viewerVideo.removeAttribute("src");
+    this.viewerVideo.load();
 
-  if (viewerControlsVisible) {
-    if (d < 0) {
-      navLeftEl.classList.add("active");
-      setTimeout(() => navLeftEl.classList.remove("active"), 100);
+    // Destroy previous HLS instance if any
+    if (this.currentHls) {
+      this.currentHls.destroy();
+      this.currentHls = null;
+    }
+
+    if (item.type === "video") {
+      await this.showVideoItem(item);
     } else {
-      navRightEl.classList.add("active");
-      setTimeout(() => navRightEl.classList.remove("active"), 100);
+      // Show image
+      this.viewerVideo.style.display = "none";
+      this.viewerImg.src = `/api/file?path=${encodeURIComponent(item._key)}`;
+      this.viewerImg.style.display = "block";
     }
   }
-}
 
-function closeViewer() {
-  disarmSlideTimer();
-  updateSlideBtn();
-  hideViewerControls();
-  viewerEl.style.display = "none";
+  async showVideoItem(item) {
+    this.viewerImg.style.display = "none";
+    this.viewerVideo.style.display = "block";
 
-  // Stop video
-  viewerVideo.pause();
-  viewerVideo.removeAttribute("src");
-  viewerVideo.load();
-  viewerVideo.style.display = "none";
+    const ext = item.name.split(".").pop().toLowerCase();
+    const commonExts = ["mp4", "m4v", "webm", "ogg", "ogv", "mkv"];
 
-  if (currentHls) {
-    currentHls.destroy();
-    currentHls = null;
+    if (commonExts.includes(ext)) {
+      try {
+        this.viewerVideo.src = `/api/file?path=${encodeURIComponent(item._key)}`;
+        await this.viewerVideo.play();
+        return;
+      } catch {
+        console.warn("Native playback failed, falling back to HLS");
+      }
+    }
+
+    try {
+      const res = await fetch(`/api/start_hls?path=${encodeURIComponent(item._key)}`);
+      const data = await res.json();
+      if (!data.playlist) {
+        this.showToast(data.error || "No playlist returned", 3000);
+        return;
+      }
+
+      let hlsStarted = false;
+      if (this.viewerVideo.canPlayType("application/vnd.apple.mpegurl")) {
+        this.viewerVideo.src = data.playlist;
+        await this.viewerVideo.play();
+        hlsStarted = true;
+      } else if (window.Hls?.isSupported()) {
+        this.currentHls = new Hls();
+        this.currentHls.loadSource(data.playlist);
+        this.currentHls.attachMedia(this.viewerVideo);
+        this.currentHls.on(Hls.Events.MANIFEST_PARSED, () => this.viewerVideo.play());
+        hlsStarted = true;
+      } else {
+        this.showToast("Hls.js not loaded, cannot play HLS video", 3000);
+      }
+
+      if (hlsStarted)
+        this.showToast("HLS playback");
+    } catch (e) {
+      console.error("Failed to start HLS stream", e);
+      this.showToast("Failed to start HLS stream: " + e.message, 3000);
+    }
   }
 
-  // Hide image
-  viewerImg.style.display = "none";
-  viewerImg.removeAttribute("src");
+  makeShuffleOrder(anchorIdx) {
+    this.shuffleOrder = this.navItems.map((_, i) => i);
 
-  toastEl.classList.remove("show");
+    // Remove anchor and put it first
+    if (anchorIdx >= 0 && anchorIdx < this.navItems.length) {
+      this.shuffleOrder.splice(this.shuffleOrder.indexOf(anchorIdx), 1);
+      this.shuffleOrder.unshift(anchorIdx);
+    }
 
-  // Exit fullscreen only if viewer itself triggered it
-  if (viewerFullscreenEntered && document.fullscreenElement === viewerEl) {
-    document.exitFullscreen?.();
-  }
-  viewerFullscreenEntered = false;
-}
-
-// ---------------- Viewer controls ----------------
-
-function showViewerControls() {
-  viewerControlsVisible = true;
-
-  document.querySelectorAll(".viewer-control").forEach(el => {
-    el.classList.add("show");
-  });
-}
-
-function hideViewerControls() {
-  clearTimeout(hideTimer);
-  viewerControlsVisible = false;
-
-  document.querySelectorAll(".viewer-control").forEach(el => {
-    el.classList.remove("show");
-  });
-
-  resetMouseAccum();
-}
-
-function toggleShuffle() {
-  if (!isViewerActive()) return;
-
-  shuffleEnabled = !shuffleEnabled;
-
-  if (shuffleEnabled && !shuffleOrder) {
-    makeShuffleOrder(navIndex);
+    // Fisher–Yates shuffle starting from index 1 to keep anchor first
+    for (let i = 1; i < this.shuffleOrder.length; i++) {
+      const j = i + Math.floor(Math.random() * (this.shuffleOrder.length - i));
+      [this.shuffleOrder[i], this.shuffleOrder[j]] = [this.shuffleOrder[j], this.shuffleOrder[i]];
+    }
   }
 
-  shuffleBtn.classList.toggle("active", shuffleEnabled);
-  showToast(shuffleEnabled ? "Shuffle enabled" : "Shuffle disabled");
-}
+  viewerNav(delta) {
+    if (this.navItems.length < 2) return;
 
-shuffleBtn.addEventListener("click", () => {
-  if (viewerAllowClick)
-    toggleShuffle();
-});
+    if (this.shuffleEnabled) {
+      const i = this.shuffleOrder.indexOf(this.navIndex);
+      const j = (i + delta + this.shuffleOrder.length) % this.shuffleOrder.length;
+      this.navIndex = this.shuffleOrder[j];
+    } else {
+      this.navIndex = (this.navIndex + delta + this.navItems.length) % this.navItems.length;
+    }
 
-function toggleSlide() {
-  if (!isViewerActive()) return;
-
-  if (!slideTimer)
-    armSlideTimer();
-  else
-    disarmSlideTimer();
-
-  updateSlideBtn();
-  showToast(slideTimer ? "Slideshow started" : "Slideshow stopped");
-}
-
-function armSlideTimer() {
-  clearTimeout(slideTimer);
-  slideTimer = setTimeout(() => {
-    viewerNav(1);
-    armSlideTimer(); // schedule next
-  }, 3000);
-}
-
-function disarmSlideTimer() {
-  clearTimeout(slideTimer);
-  slideTimer = null;
-}
-
-function updateSlideBtn() {
-  if (slideTimer) {
-    slideBtn.textContent = "⏸";
-    slideBtn.classList.add("active");
-  } else {
-    slideBtn.textContent = "▶";
-    slideBtn.classList.remove("active");
+    this.showItem(this.navItems[this.navIndex]);
   }
-}
 
-slideBtn.addEventListener("click", () => {
-  if (viewerAllowClick)
-    toggleSlide();
-});
+  manualAdvance(delta, showUI) {
+    this.viewerNav(delta);
+    if (this.slideTimer) this.armSlideTimer();
 
-function toggleFullscreen() {
-  if (!isViewerActive()) return;
+    if (showUI) {
+      this.showViewerControls();
+      clearTimeout(this.hideTimer);
+      this.hideTimer = setTimeout(() => this.hideViewerControls(), 1000);
+    }
 
-  if (!document.fullscreenElement) {
-    viewerEl.requestFullscreen?.();
-    viewerFullscreenEntered = true;
-  } else {
-    document.exitFullscreen?.();
-    viewerFullscreenEntered = false;
+    if (this.viewerControlsVisible) {
+      const navEl = delta < 0 ? this.navLeftEl : this.navRightEl;
+      navEl.classList.add("active");
+      setTimeout(() => navEl.classList.remove("active"), 100);
+    }
   }
-}
 
-fullscreenBtn.addEventListener("click", () => {
-  if (viewerAllowClick)
-    toggleFullscreen();
-});
+  // ---------------- Viewer Controls ----------------
 
-document.addEventListener("fullscreenchange", () => {
-  const fs = document.fullscreenElement;
-  fullscreenBtn.classList.toggle("active", Boolean(fs));
-  // Reset flag if user exits fullscreen manually
-  if (fs !== viewerEl)
-    viewerFullscreenEntered = false;
-});
+  showViewerControls() {
+    this.lastMouseX = null;
+    this.lastMouseY = null;
+    this.mousemoveAccum = 0;
+    this.wheelAccum = 0;
 
-closeViewerBtn.addEventListener("click", () => {
-  if (viewerAllowClick)
-    closeViewer();
-});
-
-navLeftEl.addEventListener("click", () => {
-  if (viewerAllowClick)
-    manualAdvance(-1);
-});
-
-navRightEl.addEventListener("click", () => {
-  if (viewerAllowClick)
-    manualAdvance(1);
-});
-
-// ---------------- Video controls ----------------
-
-function togglePauseVideo() {
-  if (viewerVideo.paused)
-    viewerVideo.play();
-  else
-    viewerVideo.pause();
-}
-
-function seekVideo(deltaSecs) {
-  if (viewerVideo.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
-    viewerVideo.currentTime = Math.max(0, viewerVideo.currentTime + deltaSecs);
+    this.viewerControlsVisible = true;
+    this.viewerEl.querySelectorAll(".viewer-control")
+      .forEach(el => el.classList.add("show"));
   }
-}
 
-function toggleMute() {
-  viewerVideo.muted = !viewerVideo.muted;
-  showToast(viewerVideo.muted ? "Mute" : "Unmute", 800);
-}
+  hideViewerControls() {
+    clearTimeout(this.hideTimer);
+    this.viewerControlsVisible = false;
+    this.viewerEl.querySelectorAll(".viewer-control")
+      .forEach(el => el.classList.remove("show"));
+  }
 
-function adjustVolume(delta) {
-  const vol = Math.max(0, Math.min(1, viewerVideo.volume + delta));
-  viewerVideo.volume = vol;
+  toggleShuffle() {
+    if (!this.isActive()) return;
 
-  const i = Math.round(vol * 100);
-  showToast("Volume " + i + "%", 800);
-}
+    this.shuffleEnabled = !this.shuffleEnabled;
 
-// ---------------- Toast ----------------
+    if (this.shuffleEnabled && !this.shuffleOrder)
+      this.makeShuffleOrder(this.navIndex);
 
-function showToast(msg, duration=1200) {
-  toastEl.textContent = msg;
+    this.shuffleBtn.classList.toggle("active", this.shuffleEnabled);
+    this.showToast(this.shuffleEnabled ? "Shuffle enabled" : "Shuffle disabled");
+  }
 
-  // Restart CSS transition:
-  // removing + forcing reflow ensures transition runs again
-  toastEl.classList.remove("show");
-  void toastEl.offsetWidth;
+  toggleSlide() {
+    if (!this.isActive()) return;
 
-  toastEl.classList.add("show");
+    if (!this.slideTimer)
+      this.armSlideTimer();
+    else
+      this.disarmSlideTimer();
 
-  if (toastTimer)
-    clearTimeout(toastTimer);
+    this.updateSlideBtn();
+    this.showToast(this.slideTimer ? "Slideshow started" : "Slideshow stopped");
+  }
 
-  toastTimer = setTimeout(() => {
-    toastEl.classList.remove("show");
-    toastTimer = null;
-  }, duration);
-}
+  armSlideTimer() {
+    clearTimeout(this.slideTimer);
+    this.slideTimer = setTimeout(() => {
+      this.viewerNav(1);
+      this.armSlideTimer();
+    }, 3000);
+  }
 
-// ---------------- Viewer inputs ----------------
+  disarmSlideTimer() {
+    clearTimeout(this.slideTimer);
+    this.slideTimer = null;
+  }
 
-// Keyboard
-document.addEventListener("keydown", e => {
-  if (!isViewerActive()) return;
+  updateSlideBtn() {
+    if (this.slideTimer) {
+      this.slideBtn.textContent = "⏸";
+      this.slideBtn.classList.add("active");
+    } else {
+      this.slideBtn.textContent = "▶";
+      this.slideBtn.classList.remove("active");
+    }
+  }
 
-  if (viewerVideo.style.display !== "none") {
+  toggleFullscreen() {
+    if (!this.isActive()) return;
+
+    if (!document.fullscreenElement) {
+      this.viewerEl.requestFullscreen?.();
+      this.viewerFullscreenEntered = true;
+    } else {
+      document.exitFullscreen?.();
+      this.viewerFullscreenEntered = false;
+    }
+  }
+
+  // ---------------- Video Controls ----------------
+
+  togglePauseVideo() {
+    if (this.viewerVideo.paused)
+      this.viewerVideo.play();
+    else
+      this.viewerVideo.pause();
+  }
+
+  seekVideo(deltaSecs) {
+    if (this.viewerVideo.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+      this.viewerVideo.currentTime = Math.max(0, this.viewerVideo.currentTime + deltaSecs);
+    }
+  }
+
+  toggleMute() {
+    this.viewerVideo.muted = !this.viewerVideo.muted;
+    this.showToast(this.viewerVideo.muted ? "Mute" : "Unmute", 800);
+  }
+
+  adjustVolume(delta) {
+    this.viewerVideo.volume = Math.max(0, Math.min(1, this.viewerVideo.volume + delta));
+    this.showToast(`Volume ${Math.round(this.viewerVideo.volume * 100)}%`, 800);
+  }
+
+  // ---------------- Toast ----------------
+
+  showToast(msg, duration = 1200) {
+    this.toastEl.textContent = msg;
+    this.toastEl.classList.remove("show");
+    void this.toastEl.offsetWidth; // force reflow
+    this.toastEl.classList.add("show");
+
+    if (this.toastTimer)
+      clearTimeout(this.toastTimer);
+
+    this.toastTimer = setTimeout(() => {
+      this.toastEl.classList.remove("show");
+      this.toastTimer = null;
+    }, duration);
+  }
+
+  // ---------------- Input Handling ----------------
+
+  bindUI() {
+    // Buttons
+    this.navLeftEl.addEventListener("click", () => this.manualAdvance(-1));
+    this.navRightEl.addEventListener("click", () => this.manualAdvance(1));
+    this.closeViewerBtn.addEventListener("click", () => this.close());
+    this.shuffleBtn.addEventListener("click", () => this.toggleShuffle());
+    this.slideBtn.addEventListener("click", () => this.toggleSlide());
+    this.fullscreenBtn.addEventListener("click", () => this.toggleFullscreen());
+
+    // Keyboard
+    document.addEventListener("keydown", e => this.handleKeyDown(e));
+    document.addEventListener("keyup", e => this.handleKeyUp(e));
+
+    // Mouse move
+    this.viewerEl.addEventListener("mousemove", e => this.handleMouseMove(e));
+
+    // Wheel
+    this.viewerEl.addEventListener("wheel", e => this.handleWheel(e), { passive: false });
+
+    // Touch
+    this.viewerEl.addEventListener("touchstart", e => this.handleTouchStart(e), { passive: true });
+    this.viewerEl.addEventListener("touchmove", e => this.handleTouchMove(e), { passive: true });
+    this.viewerEl.addEventListener("touchend", e => this.handleTouchEnd(e), { passive: true });
+
+    // Fullscreen change
+    document.addEventListener("fullscreenchange", () => {
+      const fs = document.fullscreenElement;
+      this.fullscreenBtn.classList.toggle("active", Boolean(fs));
+      if (fs !== this.viewerEl) this.viewerFullscreenEntered = false;
+    });
+  }
+
+  handleKeyDown(e) {
+    if (!this.isActive()) return;
+
+    if (this.viewerVideo.style.display !== "none") {
+      switch (e.key) {
+        case "ArrowLeft":
+          e.preventDefault();
+          this.seekVideo(-5);
+          return;
+        case "ArrowRight":
+          e.preventDefault();
+          this.seekVideo(5);
+          return;
+        case "ArrowDown":
+          e.preventDefault();
+          this.seekVideo(-60);
+          return;
+        case "ArrowUp":
+          e.preventDefault();
+          this.seekVideo(60);
+          return;
+        case "m":
+          this.toggleMute();
+          return;
+        case "9":
+          e.preventDefault();
+          this.adjustVolume(-0.1);
+          return;
+        case "0":
+          e.preventDefault();
+          this.adjustVolume(0.1);
+          return;
+      }
+    }
+
     switch (e.key) {
+      case "Escape":
+        this.close();
+        break;
       case "ArrowLeft":
-        e.preventDefault();
-        seekVideo(-5);
-        return;
+      case "<":
+      case "p":
+        this.manualAdvance(-1, true);
+        break;
       case "ArrowRight":
-        e.preventDefault();
-        seekVideo(5);
-        return;
-      case "ArrowDown":
-        e.preventDefault();
-        seekVideo(-60);
-        return;
-      case "ArrowUp":
-        e.preventDefault();
-        seekVideo(60);
-        return;
-      case "m":
-        // TODO: would be better if this didn't repeat
-        toggleMute();
-        return;
-      case "9":
-        e.preventDefault();
-        adjustVolume(-0.1);
-        return;
-      case "0":
-        e.preventDefault();
-        adjustVolume(0.1);
-        return;
+      case ">":
+      case "n":
+        this.manualAdvance(1, true);
+        break;
+      case "r":
+        this.toggleShuffle();
+        break;
+      case "s":
+        this.toggleSlide();
+        break;
+      case "f":
+        this.toggleFullscreen();
+        break;
     }
   }
 
-  switch (e.key) {
-    case "Escape":
-      closeViewer();
-      break;
-    case "ArrowLeft":
-    case "<":
-    case "p":
-      manualAdvance(-1, true);
-      break;
-    case "ArrowRight":
-    case ">":
-    case "n":
-      manualAdvance(1, true);
-      break;
-    // TODO: would be better if these didn't repeat
-    case "r":
-      toggleShuffle();
-      break;
-    case "s":
-      toggleSlide();
-      break;
-    case "f":
-      toggleFullscreen();
-      break;
-  }
-});
+  handleKeyUp(e) {
+    if (!this.isActive()) return;
 
-document.addEventListener("keyup", e => {
-  if (!isViewerActive()) return;
-
-  if (viewerVideo.style.display !== "none") {
-    switch (e.key) {
-      case " ":
-      case "Spacebar": // older browsers
+    if (this.viewerVideo.style.display !== "none") {
+      if (e.key === " " || e.key === "Spacebar") {
         e.preventDefault();
-        togglePauseVideo();
-        return;
+        this.togglePauseVideo();
+      }
     }
   }
-});
 
-// Mouse movement
-let lastMouseX = null;
-let lastMouseY = null;
-let mousemoveAccum = 0;
+  handleMouseMove(e) {
+    if (!this.isActive()) return;
 
-function resetMouseAccum() {
-  lastMouseX = null;
-  lastMouseY = null;
-  mousemoveAccum = 0;
-  wheelAccum = 0;
+    if (this.lastMouseX === null) {
+      this.lastMouseX = e.clientX;
+      this.lastMouseY = e.clientY;
+      return;
+    }
+
+    const dx = e.clientX - this.lastMouseX;
+    const dy = e.clientY - this.lastMouseY;
+    this.mousemoveAccum += Math.hypot(dx, dy);
+    this.lastMouseX = e.clientX;
+    this.lastMouseY = e.clientY;
+
+    if (this.mousemoveAccum >= 20) {
+      if (!this.viewerControlsVisible)
+        this.showViewerControls();
+
+      clearTimeout(this.hideTimer);
+      this.hideTimer = setTimeout(() => this.hideViewerControls(), 1000);
+
+      this.mousemoveAccum = 0;
+    }
+  }
+
+  handleWheel(e) {
+    if (!this.isActive()) return;
+
+    e.preventDefault();
+    this.wheelAccum += e.deltaY;
+
+    const threshold = 100;
+    if (this.wheelAccum >= threshold) {
+      if (this.viewerImg.style.display !== "none")
+        this.manualAdvance(1);
+      this.wheelAccum = 0;
+    } else if (this.wheelAccum <= -threshold) {
+      if (this.viewerImg.style.display !== "none")
+        this.manualAdvance(-1);
+      this.wheelAccum = 0;
+    }
+  }
+
+  handleTouchStart(e) {
+    if (!this.isActive()) return;
+    if (e.touches.length !== 1) return;
+
+    const t = e.touches[0];
+    this.touchStartX = t.clientX;
+    this.touchStartY = t.clientY;
+    this.touchActive = true;
+
+    this.showViewerControls();
+    clearTimeout(this.hideTimer);
+  }
+
+  handleTouchMove(e) {
+    if (!this.touchActive) return;
+    if (e.touches.length !== 1) return;
+
+    const t = e.touches[0];
+    // could accumulate dx/dy for gestures if needed
+  }
+
+  handleTouchEnd(e) {
+    if (!this.touchActive) return;
+    this.touchActive = false;
+
+    clearTimeout(this.hideTimer);
+    this.hideTimer = setTimeout(() => this.hideViewerControls(), 1000);
+
+    const t = e.changedTouches[0];
+    const dx = t.clientX - this.touchStartX;
+    const dy = t.clientY - this.touchStartY;
+
+    // horizontal swipe detection
+    if (Math.abs(dx) >= 50 && Math.abs(dx) > 2 * Math.abs(dy)) {
+      if (dx < 0)
+        this.viewerNav(1);
+      else
+        this.viewerNav(-1);
+    }
+  }
 }
 
-viewerEl.addEventListener("mousemove", e => {
-  if (!isViewerActive()) return;
-
-  if (lastMouseX === null) {
-    lastMouseX = e.clientX;
-    lastMouseY = e.clientY;
-    return;
-  }
-
-  const dx = e.clientX - lastMouseX;
-  const dy = e.clientY - lastMouseY;
-
-  mousemoveAccum += Math.hypot(dx, dy);
-
-  lastMouseX = e.clientX;
-  lastMouseY = e.clientY;
-
-  if (mousemoveAccum >= 20) {
-    if (!viewerControlsVisible) {
-      showViewerControls();
-    }
-    clearTimeout(hideTimer);
-    hideTimer = setTimeout(hideViewerControls, 1000);
-    mousemoveAccum = 0;
-  }
-});
-
-/*
-// This was an attempt to make the UI hide more quickly
-// when the mouse cursor is moved outside the window,
-// but it fires in other cases as well I think.
-window.addEventListener("mouseout", () => {
-  if (!isViewerActive()) return;
-
-  clearTimeout(hideTimer);
-  hideTimer = setTimeout(hideViewerControls, 200);
-});
-*/
-
-// Mouse wheel
-let wheelAccum = 0;
-
-viewerEl.addEventListener("wheel", e => {
-  if (!isViewerActive()) return;
-
-  e.preventDefault(); // stop page scrolling
-
-  wheelAccum += e.deltaY;
-
-  // TODO: for video, use mouse wheel for something else
-  const threshold = 100;
-  if (wheelAccum >= threshold) {
-    if (viewerImg.style.display !== "none")
-      manualAdvance(1);
-    wheelAccum = 0;
-  } else if (wheelAccum <= -threshold) {
-    if (viewerImg.style.display !== "none")
-      manualAdvance(-1);
-    wheelAccum = 0;
-  }
-}, { passive: false });
-
-// Touch
-let touchStartX = 0;
-let touchStartY = 0;
-let touchActive = false;
-
-viewerEl.addEventListener("touchstart", e => {
-  if (!isViewerActive()) return;
-  if (e.touches.length !== 1) return;
-  // Only handle "click" events if the viewer controls are visible
-  // when the screen is touched.
-  // It turns out to be more annoying than it helps.
-  //viewerAllowClick = viewerControlsVisible;
-
-  const t = e.touches[0];
-  touchStartX = t.clientX;
-  touchStartY = t.clientY;
-  touchActive = true;
-
-  // Keep showing overlay while touching.
-  showViewerControls();
-  clearTimeout(hideTimer);
-}, { passive: true });
-
-viewerEl.addEventListener("touchmove", e => {
-  if (!touchActive) return;
-  if (e.touches.length !== 1) return;
-
-  const t = e.touches[0];
-  const dx = t.clientX - touchStartX;
-  const dy = t.clientY - touchStartY;
-}, { passive: true });
-
-viewerEl.addEventListener("touchend", e => {
-  if (!touchActive) return;
-  touchActive = false;
-
-  clearTimeout(hideTimer);
-  hideTimer = setTimeout(hideViewerControls, 1000);
-
-  const t = e.changedTouches[0];
-  const dx = t.clientX - touchStartX;
-  const dy = t.clientY - touchStartY;
-
-  // Detect horizontal swipes.
-  if (Math.abs(dx) < 50 || Math.abs(dx) < 2 * Math.abs(dy))
-    return;
-
-  if (dx < 0) {
-    viewerNav(1);
-  } else {
-    viewerNav(-1);
-  }
-}, { passive: true });
+const viewer = new Viewer();
 
 // ---------------- Window ----------------
 

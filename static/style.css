@@ -621,7 +621,7 @@ button.active:hover {
   min-width: 0;
 }
 
-#viewerTitle {
+.viewer-title {
   flex: 0 1 60%;
   text-align: center;
   font-size: 20px;
@@ -677,10 +677,10 @@ button.active:hover {
   opacity: 1;
 }
 
-.viewer-nav.active.left .viewer-nav-arrow {
+.viewer-nav.left.active .viewer-nav-arrow {
   transform: translateX(-2px);
 }
-.viewer-nav.active.right .viewer-nav-arrow {
+.viewer-nav.right.active .viewer-nav-arrow {
   transform: translateX(2px);
 }
 
