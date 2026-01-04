@@ -457,7 +457,7 @@ class DirTree {
   }
 
   _findDirDivForPath(path) {
-    return this.treeEl.querySelector(`.dir[data-path='${path}']`);
+    return this.treeEl.querySelector(`.dir[data-path='${CSS.escape(path)}']`);
   }
 
   _openAncestorsAndSelf(path) {
