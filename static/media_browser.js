@@ -614,24 +614,31 @@ function itemMatchesMediaType(item) {
 function sortItems(items) {
   const gt = (sortAscending) ? 1 : -1;
 
+  let cmp;
   switch (sortType) {
     case "name":
+      cmp = function(a, b) {
+        // could also ignore case
+        return gt * laxCompareOsPath(a.name, b.name);
+      };
+      break;
     case "mtime":
     case "size":
+      cmp = function(a, b) {
+        const va = a[sortType];
+        const vb = b[sortType];
+
+        if (va < vb) return -gt;
+        if (va > vb) return gt;
+        return 0;
+      };
       break;
     default:
       throw "unknown sort key";
   }
 
   const copy = [...items];
-  copy.sort((a, b) => {
-    const va = a[sortType];
-    const vb = b[sortType];
-
-    if (va < vb) return -gt;
-    if (va > vb) return gt;
-    return 0;
-  });
+  copy.sort(cmp);
   return copy;
 }
 
