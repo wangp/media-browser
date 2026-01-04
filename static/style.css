@@ -234,13 +234,28 @@ button.active:hover {
   color: var(--text-main);
 }
 
+.dir-toggle::before {
+  content: "+";
+}
+.dir-toggle.open::before {
+  content: "−";
+}
+.dir-toggle.leaf::before {
+  content: "•";
+}
+
 .dir-name {
   margin-left: 6px;
   text-indent: -6px;
 }
 
 .children {
+  display: none;
   margin-left: 16px;
+}
+
+.children.open {
+  display: block;
 }
 
 /* ================= Grid Content ================= */
