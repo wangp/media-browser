@@ -212,6 +212,16 @@ button.active:hover {
   background: #374954;
 }
 
+.dir-header.selected.flash:not(:hover) {
+  animation: dir-header-flash 0.25s ease;
+}
+
+@keyframes dir-header-flash {
+  0%   { background-color: #374954; }
+  50%  { background-color: #456075; }
+  100% { background-color: #2f3f4f; }
+}
+
 .dir-toggle {
   width: 12px;
   text-align: center;

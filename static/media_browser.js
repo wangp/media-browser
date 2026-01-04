@@ -367,29 +367,43 @@ function syncOpenTreeDirs() {
 }
 
 function highlightTreeDir(newPath) {
-  // Remove previous selection
   const prev = tree.querySelector(".dir-header.selected");
-  if (prev) prev.classList.remove("selected");
 
   // Open ancestors of the selected path
   openAncestorDirs(newPath);
   syncOpenTreeDirs();
 
-  // Add selection to the target node
-  const newNode = tree.querySelector(`.dir-header span[data-path='${newPath}']`);
-  if (newNode) {
-    const header = newNode.parentElement;
-    header.classList.add("selected");
-    header.scrollIntoView({
-      //behavior: "smooth",
-      block: "nearest",
-      inline: "nearest"
-    });
+  const newNode = tree.querySelector(
+    `.dir-header span[data-path='${newPath}']`
+  );
+  if (!newNode) return;
+
+  const header = newNode.parentElement;
+
+  if (prev && prev !== header) {
+    prev.classList.remove("selected");
   }
+
+  header.classList.add("selected");
+
+  // Trigger flash animation
+  if (prev === header) {
+    header.classList.remove("flash");
+    void header.offsetWidth;
+    header.classList.add("flash");
+  }
+
+  header.scrollIntoView({
+    block: "nearest",
+    inline: "nearest"
+  });
 }
 
 function openAndLoadDir(path) {
-  if (path === currentPath) return;
+  if (path === currentPath) {
+    highlightTreeDir(path);
+    return;
+  }
 
   loadDir(path);
   openDirs[path] = true;
