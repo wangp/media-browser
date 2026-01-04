@@ -60,8 +60,6 @@ const thumbFilterInput = document.getElementById("thumbFilterInput");
 const thumbFilterClearBtn = document.getElementById("thumbFilterClearBtn");
 const fileCountSpan = document.getElementById("fileCountSpan");
 
-const contextMenu = document.getElementById("contextMenu");
-
 const viewerEl = document.getElementById("viewer");
 const viewerTitleEl = document.getElementById("viewerTitle");
 const viewerImg = document.getElementById("viewerImg");
@@ -1104,126 +1102,164 @@ thumbFilterClearBtn.addEventListener("click", () => {
 
 // ---------------- Context menu ----------------
 
+class ContextMenu {
+  constructor(container, itemSelector, msgTimeout = 1000) {
+    this.container = container;
+    this.selector = itemSelector;
+    this.msgTimeout = msgTimeout;
+
+    this.selectedItem = null;
+    this.menu = document.createElement("ul");
+    this.menu.className = "context-menu";
+
+    // actionName -> handler(selectedItem, clickedEl)
+    this.actions = {};
+
+    // message element
+    this.msgEl = document.createElement("li");
+    this.msgEl.className = "menu-msg";
+    this.menu.appendChild(this.msgEl);
+
+    document.body.appendChild(this.menu);
+
+    this._bindEvents();
+  }
+
+  addItem(label, action, handler) {
+    const li = document.createElement("li");
+    li.className = "menu-item";
+    li.dataset.action = action;
+    li.textContent = label;
+    this.menu.insertBefore(li, this.msgEl);
+    this.actions[action] = handler;
+  }
+
+  isActive() {
+    return this.menu.classList.contains("show-items");
+  }
+
+  show(x, y) {
+    if (tooltip) tooltip.hideTooltip();
+    this.menu.style.left = `${x}px`;
+    this.menu.style.top = `${y}px`;
+    this.menu.classList.remove("show-msg");
+    this.menu.classList.add("show-items");
+  }
+
+  hide() {
+    this.selectedItem = null;
+    this.menu.classList.remove("show-items", "show-msg");
+  }
+
+  showMessage(msg, clickedEl) {
+    this.msgEl.textContent = msg;
+
+    // adjust menu position so message aligns with clicked item
+    const itemOffset = clickedEl.offsetTop;
+    const menuX = parseFloat(this.menu.style.left) || 0;
+    const menuY = parseFloat(this.menu.style.top) || 0;
+
+    this.menu.style.top = `${menuY + itemOffset}px`;
+    this.menu.style.left = `${menuX}px`;
+
+    this.menu.classList.remove("show-items");
+    this.menu.classList.add("show-msg");
+
+    setTimeout(() => this.hide(), this.msgTimeout);
+  }
+
+  _bindEvents() {
+    // menu item clicks
+    this.menu.addEventListener("click", async e => {
+      if (!this.selectedItem) return;
+      const clickedEl = e.target.closest("li.menu-item");
+      if (!clickedEl) return;
+
+      const actionName = clickedEl.dataset.action;
+      const handler = this.actions[actionName];
+      if (handler)
+        await handler(this.selectedItem, clickedEl);
+    });
+
+    this.container.addEventListener("contextmenu", e => {
+      if (e.shiftKey) return; // allow native menu with shift
+
+      const target = e.target.closest(this.selector);
+      if (!target) return;
+
+      e.preventDefault();
+      this.selectedItem = target;
+      this.show(e.clientX, e.clientY);
+    });
+
+    // hide if clicking outside
+    document.addEventListener("click", e => {
+      if (this.isActive() && !this.menu.contains(e.target))
+        this.hide();
+    });
+
+    // hide on Escape
+    document.addEventListener("keydown", e => {
+      if (e.key === "Escape" && this.isActive())
+        this.hide();
+    });
+  }
+}
+
+const contextMenu = new ContextMenu(grid, ".thumb");
+
+contextMenu.addItem("Copy file URL", "copy-link", async (thumbEl, clickedEl) => {
+  const item = thumbEl._item;
+  if (!item) return;
+
+  const url = `${window.location.origin}/api/file?path=${encodeURIComponent(item._key)}`;
+  const copied = await copyToClipboard(url);
+  contextMenu.showMessage(copied ? "Copied to clipboard" : "Copy failed", clickedEl);
+});
+
+contextMenu.addItem("Copy file path", "copy-path", async (thumbEl, clickedEl) => {
+  const item = thumbEl._item;
+  if (!item) return;
+
+  const copied = await copyToClipboard(item._key);
+  contextMenu.showMessage(copied ? "Copied to clipboard" : "Copy failed", clickedEl);
+});
+
+contextMenu.addItem("Go to directory", "goto-dir", async (thumbEl, clickedEl) => {
+  const item = thumbEl._item;
+  if (!item) return;
+
+  openAndLoadDir(item._dir);
+  contextMenu.hide();
+});
+
 async function copyToClipboard(text) {
-  let copied = false;
-  if (navigator.clipboard && navigator.clipboard.writeText) {
+  if (navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(text);
-      copied = true;
+      return true;
     } catch (err) {
       console.error("Clipboard write failed", err);
+      return false;
     }
-  } else {
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    document.body.appendChild(textarea);
-    textarea.select();
-    try {
-      document.execCommand("copy");
-      copied = true;
-    } catch (err) {
-      console.error("Fallback copy failed", err);
-    }
+  }
+  // Fallback
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    document.execCommand("copy");
+    return true;
+  }
+  catch (err) {
+    console.error("Fallback copy failed", err);
+    return false;
+  }
+  finally {
     document.body.removeChild(textarea);
   }
-  return copied;
 }
-
-let contextMenuSelectedItem = null;
-
-function isContextMenuActive() {
-  return contextMenu.classList.contains("show-items");
-}
-
-function showContextMenu(x, y) {
-  if (tooltip) tooltip.hideTooltip();
-
-  contextMenu.style.top = `${y}px`;
-  contextMenu.style.left = `${x}px`;
-  contextMenu.classList.remove("show-msg");
-  contextMenu.classList.add("show-items");
-}
-
-function hideContextMenu() {
-  contextMenuSelectedItem = null;
-
-  contextMenu.classList.remove("show-items");
-  contextMenu.classList.remove("show-msg");
-}
-
-function showContextMenuMessage(msg, clickedItem) {
-  const msgEl = contextMenu.querySelector(".menu-msg");
-  msgEl.textContent = msg;
-
-  // Compute how far the clicked item is from the top of the menu
-  const itemOffset = clickedItem.offsetTop;
-
-  // Move the menu up so the feedback aligns with the item
-  const menuX = contextMenu.style.left.replace("px", "") || 0;
-  const menuY = contextMenu.style.top.replace("px", "") || 0;
-
-  contextMenu.style.top = `${parseFloat(menuY) + itemOffset}px`;
-  contextMenu.style.left = `${menuX}px`;
-
-  contextMenu.classList.remove("show-items");
-  contextMenu.classList.add("show-msg");
-
-  setTimeout(hideContextMenu, 1000);
-}
-
-contextMenu.addEventListener("click", async (e) => {
-  if (!contextMenuSelectedItem) return;
-
-  const clickedItem = e.target.closest("li.menu-item");
-  if (!clickedItem) return;
-
-  const action = clickedItem.dataset.action;
-  switch (action) {
-    case "copy-link": {
-      const path = contextMenuSelectedItem._key;
-      const url = `${window.location.origin}/api/file?path=${encodeURIComponent(path)}`;
-      const copied = await copyToClipboard(url);
-      const msg = copied ? "Copied to clipboard" : "Copied failed";
-      showContextMenuMessage(msg, clickedItem);
-      break;
-    }
-    case "copy-path": {
-      const path = contextMenuSelectedItem._key;
-      const copied = await copyToClipboard(path);
-      const msg = copied ? "Copied to clipboard" : "Copied failed";
-      showContextMenuMessage(msg, clickedItem);
-      break;
-    }
-    case "goto-dir": {
-      const dir = contextMenuSelectedItem._dir;
-      openAndLoadDir(dir);
-      hideContextMenu();
-      break;
-    }
-  }
-});
-
-grid.addEventListener("contextmenu", e => {
-  // Shift + Right click to access native context menu
-  if (e.shiftKey) return;
-
-  const thumb = e.target.closest(".thumb");
-  if (!thumb) return;
-
-  e.preventDefault();
-  contextMenuSelectedItem = thumb._item;
-  showContextMenu(e.clientX, e.clientY);
-});
-
-// Hide context menu if clicked anywhere else.
-document.addEventListener("click", e => {
-  if (isContextMenuActive() && !e.target.closest("#contextMenu"))
-    hideContextMenu();
-});
-document.addEventListener("keydown", e => {
-  if (e.key == "Escape" && isContextMenuActive())
-    hideContextMenu();
-});
 
 // ---------------- Tooltip ----------------
 
@@ -1251,7 +1287,7 @@ class Tooltip {
   }
 
   showTooltip(el, event) {
-    if (isContextMenuActive()) return;
+    if (contextMenu.isActive()) return;
 
     this.tooltipEl = el;
     this.tooltip.innerHTML = this.getContent(el);

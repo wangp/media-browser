@@ -468,7 +468,7 @@ button.active:hover {
 
 /* ================= Context menu ================= */
 
-#contextMenu {
+.context-menu {
   position: absolute;
   z-index: 1000;
   min-width: 150px;
@@ -481,39 +481,39 @@ button.active:hover {
   transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
-#contextMenu li {
+.context-menu li {
   display: none;
   padding: 8px 14px;
   user-select: none;
   cursor: pointer;
 }
 
-#contextMenu.show-items {
+.context-menu.show-items {
   background: var(--bg-menu-item);
   color: var(--text-main);
   opacity: 1;
   pointer-events: auto;
 }
 
-#contextMenu.show-items li.menu-item {
+.context-menu.show-items li.menu-item {
   display: block;
 }
 
-#contextMenu.show-items li.menu-item:hover {
+.context-menu.show-items li.menu-item:hover {
   background-color: var(--bg-menu-item-hover);
 }
 
-#contextMenu.show-msg {
+.context-menu.show-msg {
   background: var(--bg-menu-msg);
   color: var(--text-menu-msg);
-  animation: popMsg 0.3s ease forwards;
+  animation: context-menu-show-msg 0.3s ease forwards;
 }
 
-#contextMenu.show-msg li.menu-msg {
+.context-menu.show-msg li.menu-msg {
   display: block;
 }
 
-@keyframes popMsg {
+@keyframes context-menu-show-msg {
   0% { transform: scale(1); opacity: 0.7; }
   50% { transform: scale(1.1); opacity: 1; }
   100% { transform: scale(1); opacity: 1; }
