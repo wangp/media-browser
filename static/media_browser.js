@@ -5,13 +5,7 @@ let currentPath = "";
 const openDirs = {};    // open/closed state in dir tree
 const dirCache = new Map(); // path -> { mtime, files }
 
-let allItems = [];      // unfiltered
-let filteredItems = []; // after filter by media type
-let groups = {};        // dirPath -> array of items
-let groupOrder = [];
-let groupOpen = {};     // open/closed state of groups in grid
-let gridSourceItems = []; // flattened and sorted
-let visibleItems = [];  // after filter by name
+let allItems = [];
 
 let sortType = "name";  // name | mtime | size
 let sortAscending = true;
@@ -27,7 +21,7 @@ const topbar = document.getElementById("topbar");
 const main = document.getElementById("main");
 const tree = document.getElementById("tree");
 const dragbar = document.getElementById("dragbar");
-const grid = document.getElementById("grid");
+const gridEl = document.getElementById("grid");
 const breadcrumbDiv = document.getElementById("breadcrumbDiv");
 
 const setSortNameBtn = document.getElementById("setSortNameBtn");
@@ -41,14 +35,12 @@ const setMediaImagesBtn = document.getElementById("setMediaImagesBtn");
 const setMediaVideoBtn = document.getElementById("setMediaVideoBtn");
 const showNamesBtn = document.getElementById("showNamesBtn");
 const refreshBtn = document.getElementById("refreshBtn");
+
 const thumbZoomSlider = document.getElementById("thumbZoomSlider");
 const resetZoomBtn = document.getElementById("resetZoomBtn");
 const thumbFilterInput = document.getElementById("thumbFilterInput");
 const thumbFilterClearBtn = document.getElementById("thumbFilterClearBtn");
 const fileCountSpan = document.getElementById("fileCountSpan");
-
-const thumbObserver = new IntersectionObserver(thumbObserverCallback,
-  {root: grid, rootMargin: "200px"});
 
 // ---------------- Path encoding ----------------
 
@@ -380,7 +372,7 @@ function openAndLoadDir(path) {
   loadDir(path);
   openDirs[path] = true;
   highlightTreeDir(path);
-  schedScrollToNextVisibleThumb();
+  grid.schedScrollToNextVisibleThumb();
 }
 
 function toggleOpenDir(p) {
@@ -481,15 +473,14 @@ async function loadDir(newPath, { refresh = false, changeRecursiveMode = false }
 
   if (newPath !== currentPath) {
     currentPath = newPath;
-    groupOpen = {};
+    grid.resetOpenGroups();
     updateBreadcrumbs(currentPath);
     applyNewItems = true;
   }
 
   if (applyNewItems) {
     allItems = newItems;
-    deriveItemGroupsAndLists();
-    renderGrid();
+    grid.changeItems(allItems);
   }
 }
 
@@ -503,65 +494,6 @@ function findTreeNode(path, node) {
   return null;
 }
 
-function deriveItemGroupsAndLists() {
-  filteredItems = allItems.filter(itemMatchesMediaType);
-
-  groups = {};
-  groupOrder = [];
-  gridSourceItems = [];
-
-  if (recursive && groupByDir) {
-    // Build groups from filtered items
-    filteredItems.forEach(it => {
-      const dir = it._dir;
-      if (!groups[dir]) groups[dir] = [];
-      groups[dir].push(it);
-    });
-
-    // The order that groups will appear in the grid.
-    groupOrder = Object.keys(groups).sort(laxCompareOsPath);
-
-    groupOrder.forEach(dir => {
-      groups[dir] = sortItems(groups[dir]);
-      gridSourceItems.push(...groups[dir]);
-    });
-  }
-  else {
-    gridSourceItems = sortItems(filteredItems);
-  }
-
-  // Will be updated by renderGrid if further filtered by name.
-  visibleItems = gridSourceItems;
-}
-
-function itemMatchesMediaType(item) {
-  return (mediaType === "all") || (item.type === mediaType);
-}
-
-function sortItems(items) {
-  const gt = (sortAscending) ? 1 : -1;
-
-  switch (sortType) {
-    case "name":
-    case "mtime":
-    case "size":
-      break;
-    default:
-      throw "unknown sort key";
-  }
-
-  const copy = [...items];
-  copy.sort((a, b) => {
-    const va = a[sortType];
-    const vb = b[sortType];
-
-    if (va < vb) return -gt;
-    if (va > vb) return gt;
-    return 0;
-  });
-  return copy;
-}
-
 // ---------------- Top bar buttons ----------------
 
 function setSort(type) {
@@ -572,8 +504,7 @@ function setSort(type) {
     btn.classList.toggle("active", btn.dataset.type === type);
   });
 
-  deriveItemGroupsAndLists();
-  renderGrid();
+  grid.changeItems(allItems);
 }
 
 setSortNameBtn.addEventListener("click", () => setSort("name"));
@@ -586,8 +517,7 @@ function toggleOrder() {
   orderBtn.classList.add("active");
   setTimeout(() => orderBtn.classList.remove("active"), 100);
 
-  deriveItemGroupsAndLists();
-  renderGrid();
+  grid.changeItems(allItems);
 }
 
 orderBtn.addEventListener("click", toggleOrder);
@@ -597,7 +527,7 @@ function toggleRecursive() {
   recursiveBtn.classList.toggle("active", recursive);
 
   loadDir(currentPath, { changeRecursiveMode: true });
-  schedScrollToNextVisibleThumb();
+  grid.schedScrollToNextVisibleThumb();
 }
 
 recursiveBtn.addEventListener("click", toggleRecursive);
@@ -606,8 +536,7 @@ function toggleGrouping() {
   groupByDir = !groupByDir;
   groupingBtn.classList.toggle("active", groupByDir);
 
-  deriveItemGroupsAndLists();
-  renderGrid();
+  grid.changeItems(allItems);
 }
 
 groupingBtn.addEventListener("click", toggleGrouping);
@@ -620,8 +549,7 @@ function setMediaType(type) {
     btn.classList.toggle("active", btn.dataset.type === type);
   });
 
-  deriveItemGroupsAndLists();
-  renderGrid();
+  grid.changeItems(allItems);
 }
 
 setMediaAllBtn.addEventListener("click", () => setMediaType("all"));
@@ -632,9 +560,7 @@ function toggleShowNames() {
   showNames = !showNames;
   showNamesBtn.classList.toggle("active", showNames);
 
-  document.querySelectorAll(".thumb").forEach(d => {
-    d.classList.toggle("hide-name", !showNames);
-  });
+  grid.showOrHideNames(showNames);
 }
 
 showNamesBtn.addEventListener("click", toggleShowNames);
@@ -677,81 +603,153 @@ function updateBreadcrumbs(pathStr) {
   breadcrumbDiv.replaceChildren(fragment);
 }
 
-// ---------------- Grid ----------------
+// ---------------- Item helpers ----------------
 
-function renderGrid() {
-  // Clear thumbObserver. If any unloaded thumbnails are reused,
-  // we will add them to the observer again.
-  thumbObserver.disconnect();
+function itemMatchesMediaType(item) {
+  return (mediaType === "all") || (item.type === mediaType);
+}
 
-  if (filteredItems.length === 0) {
-    grid.replaceChildren(createNoMediaMsg());
-    updateFileCountSpan();
-    return;
+function sortItems(items) {
+  const gt = (sortAscending) ? 1 : -1;
+
+  switch (sortType) {
+    case "name":
+    case "mtime":
+    case "size":
+      break;
+    default:
+      throw "unknown sort key";
   }
 
-  // Map existing thumbs by stable key
-  const existing = new Map(
-    [...grid.querySelectorAll(".thumb")].map(thumb => [thumb._item._key, thumb])
-  );
+  const copy = [...items];
+  copy.sort((a, b) => {
+    const va = a[sortType];
+    const vb = b[sortType];
 
-  const frag = document.createDocumentFragment();
+    if (va < vb) return -gt;
+    if (va > vb) return gt;
+    return 0;
+  });
+  return copy;
+}
 
-  // Accumulate visible items as we go
-  let accum = []; // new array
+// ---------------- Grid ----------------
 
-  if (recursive && groupByDir) {
-    groupOrder.forEach(dir => {
-      // Groups are open by default.
-      if (!(dir in groupOpen)) groupOpen[dir] = true;
+class Grid {
+  constructor(gridEl, fileCountSpan, thumbObserver) {
+    this.gridEl = gridEl;
+    this.fileCountSpan = fileCountSpan;
+    this.thumbObserver = thumbObserver;
 
-      // Header
-      const header = document.createElement("div");
-      header.className = "group-divider";
-      header.dataset.dir = dir;
+    this.filteredItems = [];    // after filter by media type
+    this.groups = {};           // dir -> array of items
+    this.groupOrder = [];
+    this.groupOpen = Object.create(null); // dir -> boolean state
+    this.gridSourceItems = [];  // flattened and sorted
+    this.visibleItems = [];     // after filter by name
 
-      const caret = document.createElement("span");
-      caret.className = "caret";
-      caret.textContent = groupOpen[dir] ? "▾" : "▸";
+    this.bindEvents();
+  }
 
-      let labelText = decodeOsPathForDisplay(dir);
-      if (dir === currentPath) {
-        labelText = basename(labelText);
-      } else {
-        // Abbreviate by removing the current path
-        const prefix = decodeOsPathForDisplay(currentPath);
-        labelText = labelText.slice(prefix.length + 1);
+  resetOpenGroups() {
+    this.groupOpen = Object.create(null);
+  }
+
+  changeItems(allItems) {
+    this.deriveGroupsAndLists(allItems);
+    this.doRender();
+    this.updateFileCount();
+  }
+
+  // ---------------- Data derivation ----------------
+
+  deriveGroupsAndLists(allItems) {
+    this.filteredItems = allItems.filter(itemMatchesMediaType);
+    this.groups = {};
+    this.groupOrder = [];
+    this.gridSourceItems = [];
+
+    if (recursive && groupByDir) {
+      // Build groups from filtered items
+      for (const item of this.filteredItems) {
+        const dir = item._dir;
+        if (!this.groups[dir]) this.groups[dir] = [];
+        this.groups[dir].push(item);
       }
 
-      const label = document.createElement("span");
-      label.className = "label";
-      label.textContent = labelText;
+      // The order that groups will appear in the grid.
+      this.groupOrder = Object.keys(this.groups).sort(laxCompareOsPath);
 
-      header.append(label, caret);
+      for (const dir of this.groupOrder) {
+        this.groups[dir] = sortItems(this.groups[dir]);
+        this.gridSourceItems.push(...this.groups[dir]);
+      }
+    } else {
+      this.gridSourceItems = sortItems(this.filteredItems);
+    }
+
+    // Will be updated by in render.
+    this.visibleItems = this.gridSourceItems;
+  }
+
+  // ---------------- Rendering ----------------
+
+  doRender() {
+    // Clear thumbObserver. If any unloaded thumbnails are reused,
+    // we will add them to the observer again.
+    this.thumbObserver.disconnect();
+
+    if (this.filteredItems.length === 0) {
+      this.gridEl.replaceChildren(this.createNoMediaMsg());
+      return;
+    }
+
+    const existing = this.mapExistingThumbs();
+    const frag = document.createDocumentFragment();
+    const visible = [];
+
+    if (recursive && groupByDir) {
+      this.renderGrouped(frag, existing, visible);
+    } else {
+      this.renderFlat(frag, existing, visible);
+    }
+
+    this.visibleItems = visible;
+    this.gridEl.replaceChildren(frag);
+  }
+
+  renderGrouped(frag, existing, visible) {
+    for (const dir of this.groupOrder) {
+      if (!(dir in this.groupOpen)) this.groupOpen[dir] = true;
+
+      const { header, caret, label } = this.createGroupHeader(dir);
       frag.appendChild(header);
 
-      let dirVisibleItems = 0;
+      let dirVisibleCount = 0;
 
       // Container for group thumbnails
       const groupItems = document.createElement("div");
       groupItems.className = "group-items";
-      groups[dir].forEach(item => {
+
+      for (const item of this.groups[dir]) {
         const isVisible = itemMatchesFilter(item);
-        const thumb = createOrReuseThumb(item, existing, isVisible);
+        const thumb = this.createOrReuseThumb(item, existing, isVisible);
         groupItems.appendChild(thumb);
+
         if (isVisible) {
-          accum.push(item);
-          dirVisibleItems++;
+          visible.push(item);
+          dirVisibleCount++;
         }
-      });
-      groupItems.style.display = groupOpen[dir] ? "contents" : "none";
+      }
+
+      groupItems.style.display = this.groupOpen[dir] ? "contents" : "none";
       frag.appendChild(groupItems);
 
       // Toggle display on header click
       header.onclick = () => {
-        groupOpen[dir] = !groupOpen[dir];
-        groupItems.style.display = groupOpen[dir] ? "contents" : "none";
-        caret.textContent = groupOpen[dir] ? "▾" : "▸";
+        this.groupOpen[dir] = !this.groupOpen[dir];
+        groupItems.style.display = this.groupOpen[dir] ? "contents" : "none";
+        caret.textContent = this.groupOpen[dir] ? "▾" : "▸";
       };
 
       label.onclick = e => {
@@ -759,116 +757,235 @@ function renderGrid() {
         openAndLoadDir(dir);
       };
 
-      header.classList.toggle("hide", dirVisibleItems == 0);
-    });
-  } else {
-    // Flat grid
-    gridSourceItems.forEach(item => {
-      const isVisible = itemMatchesFilter(item);
-      const thumb = createOrReuseThumb(item, existing, isVisible);
-      frag.appendChild(thumb);
-      if (isVisible) {
-        accum.push(item);
-      }
-    });
-  }
-
-  visibleItems = accum;
-
-  grid.replaceChildren(frag);
-
-  updateFileCountSpan();
-}
-
-function createNoMediaMsg() {
-  const msg = document.createElement("div");
-  msg.className = "no-media";
-  msg.textContent = "No supported media in this directory";
-  return msg;
-}
-
-function createOrReuseThumb(item, existing, isVisible) {
-  let d = existing.get(item._key);
-
-  if (!d) {
-    d = document.createElement("div");
-    d.className = "thumb";
-    d._item = item; // keep reference to item
-
-    const imgPlaceholder = document.createElement("div");
-    imgPlaceholder.className = "thumb-img-placeholder";
-    imgPlaceholder.item = item;
-
-    const nameDiv = document.createElement("div");
-    nameDiv.className = "name";
-    nameDiv.textContent = decodeOsPathForDisplay(item.name);
-
-    d.appendChild(imgPlaceholder);
-    d.appendChild(nameDiv);
-
-    thumbObserver.observe(imgPlaceholder);
-
-  } else {
-    const imgPlaceholder = d.querySelector(".thumb-img-placeholder");
-    const img = imgPlaceholder.querySelector("img");
-    if (!img) {
-      thumbObserver.observe(imgPlaceholder);
+      header.classList.toggle("hide", dirVisibleCount === 0);
     }
   }
 
-  d.classList.toggle("hide", !isVisible);
-  d.classList.toggle("hide-name", !showNames);
+  renderFlat(frag, existing, visible) {
+    for (const item of this.gridSourceItems) {
+      const isVisible = itemMatchesFilter(item);
+      const thumb = this.createOrReuseThumb(item, existing, isVisible);
+      frag.appendChild(thumb);
 
-  return d;
-}
-
-function updateFileCountSpan() {
-  const m = visibleItems.length;
-  const n = gridSourceItems.length;
-
-  if (n == 0) {
-    fileCountSpan.textContent = "";
-    return;
+      if (isVisible)
+        visible.push(item);
+    }
   }
 
-  let text = (m == n) ? `${n}` : `${m} / ${n}`;
-  text += (n == 1) ? " file" : " files";
-  fileCountSpan.textContent = text;
+  createNoMediaMsg() {
+    const msg = document.createElement("div");
+    msg.className = "no-media";
+    msg.textContent = "No supported media in this directory";
+    return msg;
+  }
+
+  createOrReuseThumb(item, existing, isVisible) {
+    let thumb = existing.get(item._key);
+
+    if (!thumb) {
+      thumb = document.createElement("div");
+      thumb.className = "thumb";
+      thumb._item = item;
+
+      const placeholder = document.createElement("div");
+      placeholder.className = "thumb-img-placeholder";
+      placeholder.item = item;
+
+      const name = document.createElement("div");
+      name.className = "name";
+      name.textContent = decodeOsPathForDisplay(item.name);
+
+      thumb.append(placeholder, name);
+      this.thumbObserver.observe(placeholder);
+    } else {
+      const placeholder = thumb.querySelector(".thumb-img-placeholder");
+      if (!placeholder.querySelector("img")) {
+        this.thumbObserver.observe(placeholder);
+      }
+    }
+
+    thumb.classList.toggle("hide", !isVisible);
+    thumb.classList.toggle("hide-name", !showNames);
+
+    return thumb;
+  }
+
+  mapExistingThumbs() {
+    return new Map(
+      [...this.gridEl.querySelectorAll(".thumb")]
+        .map(t => [t._item._key, t])
+    );
+  }
+
+  createGroupHeader(dir) {
+    const header = document.createElement("div");
+    header.className = "group-divider";
+    header.dataset.dir = dir;
+
+    const caret = document.createElement("span");
+    caret.className = "caret";
+    caret.textContent = this.groupOpen[dir] ? "▾" : "▸";
+
+    let labelText = decodeOsPathForDisplay(dir);
+    if (dir === currentPath) {
+      labelText = basename(labelText);
+    } else {
+      // Abbreviate by removing the current path
+      const prefix = decodeOsPathForDisplay(currentPath);
+      labelText = labelText.slice(prefix.length + 1);
+    }
+
+    const label = document.createElement("span");
+    label.className = "label";
+    label.textContent = labelText;
+
+    header.append(label, caret);
+
+    return { header, caret, label };
+  }
+
+  // ---------------- Thumbnails ----------------
+
+  showOrHideNames(showNames) {
+    const thumbs = this.gridEl.querySelectorAll(".thumb");
+    thumbs.forEach(thumb => {
+      thumb.classList.toggle("hide-name", !showNames);
+    });
+  }
+
+  updateThumbSizes(value) {
+    gridEl.style.gridTemplateColumns = `repeat(auto-fill, minmax(${value}px, 1fr))`;
+  }
+
+  updateThumbsForFilterText(filterTerms) {
+    const thumbs = this.gridEl.querySelectorAll(".thumb");
+    const headers = this.gridEl.querySelectorAll(".group-divider");
+
+    // Fast path: no filter
+    if (!filterTerms || filterTerms.length === 0) {
+      thumbs.forEach(t => t.classList.remove("hide"));
+      headers.forEach(h => h.classList.remove("hide"));
+
+      this.visibleItems = this.gridSourceItems;
+      this.updateFileCount();
+      return;
+    }
+
+    const visible = []; // new array
+    const seenDir = (recursive && groupByDir) ? Object.create(null) : null;
+
+    for (const thumb of thumbs) {
+      const item = thumb._item;
+      const match = itemMatchesFilter(item);
+
+      thumb.classList.toggle("hide", !match);
+
+      if (match) {
+        visible.push(item);
+        if (seenDir) seenDir[item._dir] = true;
+      }
+    }
+
+    if (seenDir) {
+      for (const hdr of headers) {
+        hdr.classList.toggle("hide", !seenDir[hdr.dataset.dir]);
+      }
+    }
+
+    this.visibleItems = visible;
+    this.updateFileCount();
+  }
+
+  scrollToNextVisibleThumb() {
+    const thumbs = this.gridEl.querySelectorAll(".thumb:not(.hide)");
+    if (thumbs.length === 0) return;
+
+    const containerRect = this.gridEl.getBoundingClientRect();
+    const scrollTop = this.gridEl.scrollTop;
+
+    let targetThumb = null;
+
+    for (let i = 0; i < thumbs.length; i++) {
+      const r = thumbs[i].getBoundingClientRect();
+      if (r.top > containerRect.top) {
+        targetThumb = thumbs[i];
+        break;
+      }
+    }
+
+    // If none is below the top, pick the first thumb in the grid
+    if (!targetThumb) targetThumb = thumbs[0];
+
+    const thumbRect = targetThumb.getBoundingClientRect();
+    const offset = (recursive && groupByDir) ? 40 : 5; // room for group label
+    const targetTop = scrollTop + (thumbRect.top - containerRect.top - offset);
+
+    this.gridEl.scrollTo({
+      top: targetTop,
+      //behavior: "smooth"
+    });
+  }
+
+  schedScrollToNextVisibleThumb() {
+    // Wait for layout to stabilise after loadDir/renderGrid.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        this.scrollToNextVisibleThumb();
+      });
+    });
+  }
+
+  // ---------------- Misc ----------------
+
+  updateFileCount() {
+    const m = this.visibleItems.length;
+    const n = this.gridSourceItems.length;
+    updateFileCountSpan(m, n);
+  }
+
+  // ---------------- Events ----------------
+
+  bindEvents() {
+    this.gridEl.addEventListener("click", e => {
+      const img = e.target.closest(".thumb-img-placeholder img");
+      if (!img) return;
+
+      const item = img.parentElement.item;
+      if (item) viewer.openItem(item, this.visibleItems);
+    });
+  }
 }
 
 function thumbObserverCallback(entries, observer) {
-  entries.forEach(entry => {
-    if (entry.isIntersecting) {
-      const placeholder = entry.target;
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
 
-      if (!placeholder.querySelector("img")) {
-        const item = placeholder.item;
-
-        const img = document.createElement("img");
-        img.loading = "lazy";
-        img.src = "/api/thumb?path=" + encodeURIComponent(item._key);
-        img.onload = () => { placeholder.style.background = "none"; };
-        placeholder.appendChild(img);
-      }
-
+    const placeholder = entry.target;
+    if (placeholder.querySelector("img")) {
       observer.unobserve(placeholder);
+      continue;
     }
-  });
+
+    const item = placeholder.item;
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.src = "/api/thumb?path=" + encodeURIComponent(item._key);
+    img.onload = () => { placeholder.style.background = "none"; };
+
+    placeholder.appendChild(img);
+    observer.unobserve(placeholder);
+  }
 }
 
-grid.addEventListener("click", (e) => {
-  const img = e.target.closest(".thumb-img-placeholder img");
-  if (!img) return;
-  const placeholder = img.parentElement;
-  const item = placeholder.item;
-  if (item) viewer.openItem(item, visibleItems);
-});
+const thumbObserver = new IntersectionObserver(thumbObserverCallback,
+  {root: gridEl, rootMargin: "200px"});
+const grid = new Grid(gridEl, fileCountSpan, thumbObserver);
 
 // ---------------- Thumbnail Zoom ----------------
 
 thumbZoomSlider.addEventListener("input", () => {
   const value = parseInt(thumbZoomSlider.value);
-  updateThumbSizes(value);
+  grid.updateThumbSizes(value);
 });
 
 thumbZoomSlider.addEventListener("wheel", e => {
@@ -886,7 +1003,7 @@ thumbZoomSlider.addEventListener("wheel", e => {
   }
 
   thumbZoomSlider.value = value;
-  updateThumbSizes(value);
+  grid.updateThumbSizes(value);
 }, { passive: false });
 
 resetZoomBtn.addEventListener("click", () => {
@@ -894,12 +1011,8 @@ resetZoomBtn.addEventListener("click", () => {
   setTimeout(() => resetZoomBtn.classList.remove("active"), 100);
 
   thumbZoomSlider.value = DEFAULT_THUMB_ZOOM
-  updateThumbSizes(DEFAULT_THUMB_ZOOM);
+  grid.updateThumbSizes(DEFAULT_THUMB_ZOOM);
 });
-
-function updateThumbSizes(value) {
-  grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${value}px, 1fr))`;
-}
 
 // ---------------- Filter thumbnails by name ----------------
 
@@ -953,84 +1066,6 @@ function itemMatchesFilter(item) {
   });
 }
 
-function updateThumbsForFilterText() {
-  const thumbs = grid.querySelectorAll(".thumb");
-  const groupHeaders = grid.querySelectorAll(".group-divider");
-
-  if (filterTerms.length === 0) {
-    thumbs.forEach(t => t.classList.remove("hide"));
-    groupHeaders.forEach(hdr => hdr.classList.remove("hide"));
-    visibleItems = gridSourceItems;
-    updateFileCountSpan();
-    return;
-  }
-
-  let accumItems = []; // new array
-  let seenDir = (recursive && groupByDir) ? {} : null;
-
-  for (const thumb of thumbs) {
-    const item = thumb._item;
-    const match = itemMatchesFilter(item);
-    thumb.classList.toggle("hide", !match);
-    if (match) {
-      accumItems.push(item);
-      if (seenDir && !seenDir[item._dir]) {
-        seenDir[item._dir] = true;
-      }
-    }
-  }
-
-  if (seenDir) {
-    groupHeaders.forEach(hdr => {
-      hdr.classList.toggle("hide", !seenDir[hdr.dataset.dir]);
-    });
-  }
-
-  visibleItems = accumItems;
-  updateFileCountSpan();
-
-  return true;
-}
-
-function scrollToNextVisibleThumb() {
-  const thumbs = grid.querySelectorAll(".thumb:not(.hide)");
-  if (thumbs.length === 0) return;
-
-  const containerRect = grid.getBoundingClientRect();
-  const scrollTop = grid.scrollTop;
-
-  let targetThumb = null;
-
-  for (let i = 0; i < thumbs.length; i++) {
-    const r = thumbs[i].getBoundingClientRect();
-    if (r.top > containerRect.top) {
-      targetThumb = thumbs[i];
-      break;
-    }
-  }
-
-  // If none is below the top, pick the first thumb in the grid
-  if (!targetThumb) targetThumb = thumbs[0];
-
-  const thumbRect = targetThumb.getBoundingClientRect();
-  const offset = (recursive && groupByDir) ? 40 : 5; // room for group label
-  const targetTop = scrollTop + (thumbRect.top - containerRect.top - offset);
-
-  grid.scrollTo({
-    top: targetTop,
-    //behavior: "smooth"
-  });
-}
-
-function schedScrollToNextVisibleThumb() {
-  // Wait for layout to stabilise after loadDir/renderGrid.
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      scrollToNextVisibleThumb();
-    });
-  });
-}
-
 function handleThumbFilterInput({ scroll = true }) {
   clearTimeout(filterTimeout);
   filterTimeout = null;
@@ -1038,9 +1073,9 @@ function handleThumbFilterInput({ scroll = true }) {
   if (!updateFilterTerms(thumbFilterInput.value))
     return;
 
-  updateThumbsForFilterText();
+  grid.updateThumbsForFilterText(filterTerms);
   if (scroll)
-    scrollToNextVisibleThumb();
+    grid.scrollToNextVisibleThumb();
 }
 
 thumbFilterInput.addEventListener("input", () => {
@@ -1059,7 +1094,7 @@ thumbFilterInput.addEventListener("keydown", e => {
   switch (e.key) {
     case "Enter":
       handleThumbFilterInput({ scroll: false });
-      scrollToNextVisibleThumb(); // scroll even no changed
+      grid.scrollToNextVisibleThumb(); // scroll even when not changed
       break;
     case "Escape":
       thumbFilterInput.value = "";
@@ -1073,6 +1108,19 @@ thumbFilterClearBtn.addEventListener("click", () => {
   handleThumbFilterInput({ scroll: true });
   thumbFilterInput.focus();
 });
+
+// ---------------- File count ----------------
+
+function updateFileCountSpan(m, n) {
+  if (n == 0) {
+    fileCountSpan.textContent = "";
+    return;
+  }
+
+  let text = (m == n) ? `${n}` : `${m} / ${n}`;
+  text += (n == 1) ? " file" : " files";
+  fileCountSpan.textContent = text;
+}
 
 // ---------------- Context menu ----------------
 
@@ -1180,7 +1228,7 @@ class ContextMenu {
   }
 }
 
-const contextMenu = new ContextMenu(grid, ".thumb");
+const contextMenu = new ContextMenu(gridEl, ".thumb");
 
 contextMenu.addItem("Copy file URL", "copy-link", async (thumbEl, clickedEl) => {
   const item = thumbEl._item;
@@ -1388,7 +1436,7 @@ class Tooltip {
   }
 }
 
-const tooltip = new Tooltip(grid, ".thumb", {
+const tooltip = new Tooltip(gridEl, ".thumb", {
   showDelay: 1000,
   hideDelay: 250,
   switchDelay: 250,
