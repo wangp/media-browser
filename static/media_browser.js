@@ -954,6 +954,21 @@ class Grid {
     });
   }
 
+  highlightThumbForItem(item) {
+    if (!item) return;
+
+    const thumb = this.thumbMap.get(item._key);
+    if (!thumb) return;
+
+    thumb.scrollIntoView({ block: "center", inline: "nearest" });
+
+    thumb.classList.remove("highlight");
+    void thumb.offsetWidth; // force reflow
+    thumb.classList.add("highlight");
+
+    setTimeout(() => thumb.classList.remove("highlight"), 900);
+  }
+
   // ---------------- Misc ----------------
 
   updateFileCount() {
@@ -1640,6 +1655,8 @@ class Viewer {
 
     if (tooltip)
       tooltip.setEnabled(true);
+
+    grid.highlightThumbForItem(this.navItems[this.navIndex]);
   }
 
   // ---------------- Item Display ----------------

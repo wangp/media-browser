@@ -322,10 +322,17 @@ button.active:hover {
   display: flex;
   flex-direction: column;
   aspect-ratio: 16 / 9;
+  transition: background-color 0.4s ease, box-shadow 0.4s ease, filter 0.4s ease;
 }
 
 .thumb.hide {
   display: none;
+}
+
+.thumb.highlight {
+  background-color: rgba(255,255,255,0.15);
+  box-shadow: 0 0 0 6px rgba(255,255,255,0.15);
+  filter: brightness(1.25);
 }
 
 .thumb-img-placeholder {
