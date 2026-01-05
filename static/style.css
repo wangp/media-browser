@@ -302,6 +302,22 @@ button.active:hover {
   white-space: nowrap;
 }
 
+.group-divider .caret::before {
+  content: "▾";
+}
+
+.group-divider .caret.closed::before {
+  content: "▸";
+}
+
+.group-items {
+  display: contents;
+}
+
+.group-items.hide {
+  display: none;
+}
+
 .thumb {
   display: flex;
   flex-direction: column;

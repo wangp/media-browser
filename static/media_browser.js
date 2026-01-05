@@ -751,14 +751,15 @@ class Grid {
         }
       }
 
-      groupItems.style.display = this.groupOpen[dir] ? "contents" : "none";
+      caret.classList.toggle("closed", !this.groupOpen[dir]);
+      groupItems.classList.toggle("hide", !this.groupOpen[dir]);
       frag.appendChild(groupItems);
 
       // Toggle display on header click
       header.onclick = () => {
         this.groupOpen[dir] = !this.groupOpen[dir];
-        groupItems.style.display = this.groupOpen[dir] ? "contents" : "none";
-        caret.textContent = this.groupOpen[dir] ? "▾" : "▸";
+        caret.classList.toggle("closed", !this.groupOpen[dir]);
+        groupItems.classList.toggle("hide", !this.groupOpen[dir]);
       };
 
       label.onclick = e => {
@@ -766,6 +767,7 @@ class Grid {
         openAndLoadDir(dir);
       };
 
+      // Hide header when all items filtered out
       header.classList.toggle("hide", dirVisibleCount === 0);
     }
   }
@@ -833,7 +835,6 @@ class Grid {
 
     const caret = document.createElement("span");
     caret.className = "caret";
-    caret.textContent = this.groupOpen[dir] ? "▾" : "▸";
 
     let labelText = decodeOsPathForDisplay(dir);
     if (dir === currentPath) {
