@@ -657,6 +657,8 @@ class Grid {
     this.gridSourceItems = [];  // flattened and sorted
     this.visibleItems = [];     // after filter by name
 
+    this.thumbMap = new Map();  // key -> thumb element
+
     this.bindEvents();
   }
 
@@ -710,24 +712,32 @@ class Grid {
 
     if (this.filteredItems.length === 0) {
       this.gridEl.replaceChildren(this.createNoMediaMsg());
+      this.thumbMap.clear();
       return;
     }
 
-    const existing = this.mapExistingThumbs();
     const frag = document.createDocumentFragment();
     const visible = [];
 
+    for (const t of this.thumbMap.values())
+      t._used = false;
+
     if (recursive && groupByDir) {
-      this.renderGrouped(frag, existing, visible);
+      this.renderGrouped(frag, visible);
     } else {
-      this.renderFlat(frag, existing, visible);
+      this.renderFlat(frag, visible);
+    }
+
+    // drop unused thumbs
+    for (const [key, thumb] of this.thumbMap) {
+      if (!thumb._used) this.thumbMap.delete(key);
     }
 
     this.visibleItems = visible;
     this.gridEl.replaceChildren(frag);
   }
 
-  renderGrouped(frag, existing, visible) {
+  renderGrouped(frag, visible) {
     for (const dir of this.groupOrder) {
       if (!(dir in this.groupOpen)) this.groupOpen[dir] = true;
 
@@ -742,7 +752,8 @@ class Grid {
 
       for (const item of this.groups[dir]) {
         const isVisible = itemMatchesFilter(item);
-        const thumb = this.createOrReuseThumb(item, existing, isVisible);
+        const thumb = this.getOrCreateThumb(item, isVisible);
+
         groupItems.appendChild(thumb);
 
         if (isVisible) {
@@ -753,13 +764,15 @@ class Grid {
 
       caret.classList.toggle("closed", !this.groupOpen[dir]);
       groupItems.classList.toggle("hide", !this.groupOpen[dir]);
-      frag.appendChild(groupItems);
+      header.classList.toggle("hide", dirVisibleCount === 0);
 
       // Toggle display on header click
       header.onclick = () => {
         this.groupOpen[dir] = !this.groupOpen[dir];
-        caret.classList.toggle("closed", !this.groupOpen[dir]);
-        groupItems.classList.toggle("hide", !this.groupOpen[dir]);
+        const open = this.groupOpen[dir];
+
+        caret.classList.toggle("closed", !open);
+        groupItems.classList.toggle("hide", !open);
       };
 
       label.onclick = e => {
@@ -767,15 +780,14 @@ class Grid {
         openAndLoadDir(dir);
       };
 
-      // Hide header when all items filtered out
-      header.classList.toggle("hide", dirVisibleCount === 0);
+      frag.appendChild(groupItems);
     }
   }
 
-  renderFlat(frag, existing, visible) {
+  renderFlat(frag, visible) {
     for (const item of this.gridSourceItems) {
       const isVisible = itemMatchesFilter(item);
-      const thumb = this.createOrReuseThumb(item, existing, isVisible);
+      const thumb = this.getOrCreateThumb(item, isVisible);
       frag.appendChild(thumb);
 
       if (isVisible)
@@ -790,8 +802,8 @@ class Grid {
     return msg;
   }
 
-  createOrReuseThumb(item, existing, isVisible) {
-    let thumb = existing.get(item._key);
+  getOrCreateThumb(item, isVisible) {
+    let thumb = this.thumbMap.get(item._key);
 
     if (!thumb) {
       thumb = document.createElement("div");
@@ -801,6 +813,7 @@ class Grid {
       const placeholder = document.createElement("div");
       placeholder.className = "thumb-img-placeholder";
       placeholder.item = item;
+      thumb._placeholder = placeholder;
 
       const name = document.createElement("div");
       name.className = "name";
@@ -808,24 +821,17 @@ class Grid {
 
       thumb.append(placeholder, name);
       this.thumbObserver.observe(placeholder);
-    } else {
-      const placeholder = thumb.querySelector(".thumb-img-placeholder");
-      if (!placeholder.querySelector("img")) {
-        this.thumbObserver.observe(placeholder);
-      }
+
+      this.thumbMap.set(item._key, thumb);
+    } else if (!thumb._placeholder.querySelector("img")) {
+      this.thumbObserver.observe(thumb._placeholder);
     }
 
+    thumb._used = true;
     thumb.classList.toggle("hide", !isVisible);
     thumb.classList.toggle("hide-name", !showNames);
 
     return thumb;
-  }
-
-  mapExistingThumbs() {
-    return new Map(
-      [...this.gridEl.querySelectorAll(".thumb")]
-        .map(t => [t._item._key, t])
-    );
   }
 
   createGroupHeader(dir) {
@@ -857,10 +863,9 @@ class Grid {
   // ---------------- Thumbnails ----------------
 
   showOrHideNames(showNames) {
-    const thumbs = this.gridEl.querySelectorAll(".thumb");
-    thumbs.forEach(thumb => {
+    for (const thumb of this.thumbMap.values()) {
       thumb.classList.toggle("hide-name", !showNames);
-    });
+    }
   }
 
   updateThumbSizes(value) {
@@ -868,13 +873,17 @@ class Grid {
   }
 
   updateThumbsForFilterText(filterTerms) {
-    const thumbs = this.gridEl.querySelectorAll(".thumb");
-    const headers = this.gridEl.querySelectorAll(".group-divider");
-
     // Fast path: no filter
     if (!filterTerms || filterTerms.length === 0) {
-      thumbs.forEach(t => t.classList.remove("hide"));
-      headers.forEach(h => h.classList.remove("hide"));
+      for (const thumb of this.thumbMap.values()) {
+        thumb.classList.remove("hide");
+      }
+
+      if (recursive && groupByDir) {
+        for (const header of this.gridEl.querySelectorAll(".group-divider")) {
+          header.classList.remove("hide");
+        }
+      }
 
       this.visibleItems = this.gridSourceItems;
       this.updateFileCount();
@@ -884,7 +893,7 @@ class Grid {
     const visible = []; // new array
     const seenDir = (recursive && groupByDir) ? Object.create(null) : null;
 
-    for (const thumb of thumbs) {
+    for (const thumb of this.thumbMap.values()) {
       const item = thumb._item;
       const match = itemMatchesFilter(item);
 
@@ -897,8 +906,8 @@ class Grid {
     }
 
     if (seenDir) {
-      for (const hdr of headers) {
-        hdr.classList.toggle("hide", !seenDir[hdr.dataset.dir]);
+      for (const header of this.gridEl.querySelectorAll(".group-divider")) {
+        header.classList.toggle("hide", !seenDir[header.dataset.dir]);
       }
     }
 
