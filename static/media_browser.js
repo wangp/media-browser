@@ -1195,7 +1195,9 @@ class ContextMenu {
   }
 
   show(x, y) {
-    if (tooltip) tooltip.hideTooltip();
+    if (tooltip)
+      tooltip.setEnabled(false);
+
     this.menu.style.left = `${x}px`;
     this.menu.style.top = `${y}px`;
     this.menu.classList.remove("show-msg");
@@ -1205,6 +1207,9 @@ class ContextMenu {
   hide() {
     this.selectedItem = null;
     this.menu.classList.remove("show-items", "show-msg");
+
+    if (tooltip)
+      tooltip.setEnabled(true);
   }
 
   showMessage(msg, clickedEl) {
@@ -1321,6 +1326,7 @@ async function copyToClipboard(text) {
 
 class Tooltip {
   constructor(container, selector, options = {}) {
+    this.enabled = true;
     this.container = container;
     this.selector = selector;
     this.showDelay = options.showDelay ?? 1000;
@@ -1342,8 +1348,14 @@ class Tooltip {
     this.attachEvents();
   }
 
+  setEnabled(enabled) {
+    this.enabled = enabled;
+    if (!enabled)
+      this.hideTooltip();
+  }
+
   showTooltip(el, event) {
-    if (contextMenu.isActive()) return;
+    if (!tooltip.enabled) return;
 
     this.tooltipEl = el;
     this.tooltip.innerHTML = this.getContent(el);
@@ -1569,6 +1581,9 @@ class Viewer {
       return;
     }
 
+    if (tooltip)
+      tooltip.setEnabled(false);
+
     this.navItems = navItems;
     this.navIndex = idx;
 
@@ -1612,13 +1627,14 @@ class Viewer {
       document.exitFullscreen?.();
     }
     this.viewerFullscreenEntered = false;
+
+    if (tooltip)
+      tooltip.setEnabled(true);
   }
 
   // ---------------- Item Display ----------------
 
   async showItem(item) {
-    if (tooltip) tooltip.hideTooltip();
-
     this.viewerTitleEl.textContent = decodeOsPathForDisplay(item.name);
 
     // Cancel previous video if any
