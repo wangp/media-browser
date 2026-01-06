@@ -22,16 +22,11 @@ const tree = document.getElementById("tree");
 const dragbar = document.getElementById("dragbar");
 const gridEl = document.getElementById("grid");
 const breadcrumbDiv = document.getElementById("breadcrumbDiv");
-
-const setSortNameBtn = document.getElementById("setSortNameBtn");
-const setSortTimeBtn = document.getElementById("setSortTimeBtn");
-const setSortSizeBtn = document.getElementById("setSortSizeBtn");
+const sortButtons = document.getElementById("sortTypeGroup").querySelectorAll("button");
 const orderBtn = document.getElementById("orderBtn");
 const recursiveBtn = document.getElementById("recursiveBtn");
 const groupingBtn = document.getElementById("groupingBtn");
-const setMediaAllBtn = document.getElementById("setMediaAllBtn");
-const setMediaImagesBtn = document.getElementById("setMediaImagesBtn");
-const setMediaVideoBtn = document.getElementById("setMediaVideoBtn");
+const mediaTypeButtons = document.getElementById("mediaTypeGroup").querySelectorAll("button");
 const showNamesBtn = document.getElementById("showNamesBtn");
 const refreshBtn = document.getElementById("refreshBtn");
 
@@ -516,20 +511,22 @@ dirTree.onSelect = (path) => {
 
 // ---------------- Top bar buttons ----------------
 
-function setSort(type) {
+function setSortClick(e) {
+  const activeBtn = e.currentTarget;
+  const type = activeBtn.dataset.type;
   if (sortType === type) return;
   sortType = type;
 
-  document.querySelectorAll("#sortTypeGroup button").forEach(btn => {
-    btn.classList.toggle("active", btn.dataset.type === type);
-  });
+  for (const btn of sortButtons) {
+    btn.classList.toggle("active", btn === activeBtn);
+  }
 
   grid.changeItems(allItems);
 }
 
-setSortNameBtn.addEventListener("click", () => setSort("name"));
-setSortTimeBtn.addEventListener("click", () => setSort("mtime"));
-setSortSizeBtn.addEventListener("click", () => setSort("size"));
+for (const btn of sortButtons) {
+  btn.addEventListener("click", setSortClick);
+}
 
 function toggleOrder() {
   sortAscending = !sortAscending;
@@ -561,20 +558,22 @@ function toggleGrouping() {
 
 groupingBtn.addEventListener("click", toggleGrouping);
 
-function setMediaType(type) {
+function setMediaTypeClick(e) {
+  const activeBtn = e.currentTarget;
+  const type = activeBtn.dataset.type;
   if (mediaType === type) return;
   mediaType = type;
 
-  document.querySelectorAll("#mediaTypeGroup button").forEach(btn => {
-    btn.classList.toggle("active", btn.dataset.type === type);
-  });
+  for (const btn of mediaTypeButtons) {
+    btn.classList.toggle("active", btn === activeBtn);
+  }
 
   grid.changeItems(allItems);
 }
 
-setMediaAllBtn.addEventListener("click", () => setMediaType("all"));
-setMediaImageBtn.addEventListener("click", () => setMediaType("image"));
-setMediaVideoBtn.addEventListener("click", () => setMediaType("video"));
+for (const btn of mediaTypeButtons) {
+  btn.addEventListener("click", setMediaTypeClick);
+}
 
 function toggleShowNames() {
   showNames = !showNames;
