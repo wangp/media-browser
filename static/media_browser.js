@@ -242,15 +242,22 @@ async function loadTree() {
   dirTree.render(treeData, currentPath);
 }
 
-function openAndLoadDir(path) {
+function openAndLoadDir(path, { highlightItem = null } = {}) {
   if (path === currentPath) {
     dirTree.openAndHighlightDir(path, true);
+    if (highlightItem) {
+      grid.highlightThumbForItem(highlightItem);
+    }
     return;
   }
 
   loadDir(path);
   dirTree.openAndHighlightDir(path, false);
-  grid.schedScrollToNextVisibleThumb();
+  if (highlightItem) {
+    grid.highlightThumbForItem(highlightItem);
+  } else {
+    grid.schedScrollToNextVisibleThumb();
+  }
 }
 
 async function loadDir(newPath, { refresh = false, changeRecursiveMode = false } = {}) {
@@ -1315,7 +1322,7 @@ contextMenu.addItem("Go to directory", "goto-dir", async (thumbEl, clickedEl) =>
   const item = thumbEl._item;
   if (!item) return;
 
-  openAndLoadDir(item._dir);
+  openAndLoadDir(item._dir, { highlightItem: item });
   contextMenu.hide();
 });
 
