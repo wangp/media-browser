@@ -680,6 +680,14 @@ button.active:hover {
   transition: background 0.2s ease;
 }
 
+.viewer-buttons .slide-btn::before {
+  content: "▶";
+}
+
+.viewer-buttons .slide-btn.active::before {
+  content: "⏸";
+}
+
 .viewer-nav {
   position: absolute;
   top: 20%;

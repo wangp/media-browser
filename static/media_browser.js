@@ -1632,7 +1632,6 @@ class Viewer {
 
   close() {
     this.disarmSlideTimer();
-    this.updateSlideBtn();
     this.hideViewerControls();
 
     this.viewerEl.style.display = "none";
@@ -1827,7 +1826,6 @@ class Viewer {
     else
       this.disarmSlideTimer();
 
-    this.updateSlideBtn();
     this.showToast(this.slideTimer ? "Slideshow started" : "Slideshow stopped");
   }
 
@@ -1837,21 +1835,15 @@ class Viewer {
       this.viewerNav(1);
       this.armSlideTimer();
     }, 3000);
+
+    this.slideBtn.classList.add("active");
   }
 
   disarmSlideTimer() {
     clearTimeout(this.slideTimer);
     this.slideTimer = null;
-  }
 
-  updateSlideBtn() {
-    if (this.slideTimer) {
-      this.slideBtn.textContent = "⏸";
-      this.slideBtn.classList.add("active");
-    } else {
-      this.slideBtn.textContent = "▶";
-      this.slideBtn.classList.remove("active");
-    }
+    this.slideBtn.classList.remove("active");
   }
 
   toggleFullscreen() {
