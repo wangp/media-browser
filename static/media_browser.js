@@ -1968,11 +1968,11 @@ class Viewer {
           return;
         case "9":
           e.preventDefault();
-          this.adjustVolume(-0.1);
+          this.adjustVolume(-0.05);
           return;
         case "0":
           e.preventDefault();
-          this.adjustVolume(0.1);
+          this.adjustVolume(0.05);
           return;
       }
     }
