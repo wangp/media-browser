@@ -225,13 +225,14 @@ const treeDragbar = new Dragbar({
 
 class TreeData {
   constructor() {
-    this.tree = null;
+    this.tree = null;       // cached tree structure from /api/tree
     this.cache = new Map(); // dir -> { files, mtime }
+    // TODO: cache items
   }
 
   async loadTree() {
     try {
-      const res = await fetch(`/api/tree`);
+      const res = await fetch("/api/tree");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       this.tree = await res.json();
       return this.tree;
@@ -246,58 +247,69 @@ class TreeData {
     return this.tree?.dirs?.[0]?.path || null;
   }
 
-  // If 'refresh' then always check /api/list.
-  async listDir(dir, { refresh = false } = {}) {
-    const cacheEntry = this.cache.get(dir);
+  // Send batch request to /api/list-batch for multiple directories
+  async listBatch(dirs) {
+    if (!dirs.length) return {};
 
-    if (!refresh && cacheEntry) {
-      return cacheEntry.files;
+    const res = await fetch("/api/list-batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(dirs),
+      cache: "no-store"
+    });
+
+    if (!res.ok)
+      throw new Error(`Failed batch list: ${res.status}`);
+    const data = await res.json();
+
+    // Update cache for changed directories
+    for (const dir of Object.keys(data)) {
+      if (data[dir].not_modified)
+        continue;
+      const { mtime, files } = data[dir];
+      this.cache.set(dir, { mtime, files });
     }
 
-    const query = new URLSearchParams({ path: dir });
-    if (cacheEntry?.mtime)
-      query.set("since", cacheEntry.mtime);
-
-    try {
-      const res = await fetch(`/api/list?${query.toString()}`, {
-        cache: "no-store"
-      });
-
-      if (!res.ok) {
-        console.warn(`Failed to list directory ${dir}: ${res.status}`);
-        this.cache.set(dir, { files: [] });
-        return [];
-      }
-
-      const data = await res.json();
-      let files = [];
-
-      if (data.not_modified && cacheEntry) {
-        // Directory hasn't changed; reuse cached files
-        files = cacheEntry.files;
-      } else {
-        // New or updated directory
-        files = data.files || [];
-        this.cache.set(dir, { files, mtime: data.mtime });
-      }
-
-      return files;
-    } catch (err) {
-      console.warn(`Error fetching directory ${dir}:`, err);
-      this.cache.set(dir, { files: [] }); // cache empty
-      return [];
-    }
+    return data;
   }
 
   // Builds items for a directory and its subdirs if requested.
   // Returns a flat array of items.
-  async buildItems(dir, { recursive = false, refresh = false } = {}) {
+  async buildItems(rootDir, { recursive = false, refresh = false } = {}) {
     const items = [];
-    const addItemsForDir = async (d) => {
-      const files = await this.listDir(d, { refresh });
+    const dirsToProcess = [rootDir];
+
+    if (recursive) {
+      const collectSubdirs = (node, parentPath) => {
+        if (!node) return;
+
+        for (const d of node.dirs || []) {
+          const subdir = joinOsPaths(parentPath, d.name);
+          dirsToProcess.push(subdir);
+          collectSubdirs(d, subdir);
+        }
+      };
+
+      const rootNode = this.findNode(rootDir);
+      collectSubdirs(rootNode, rootDir);
+    }
+
+    // Prepare batch request
+    const toFetch = dirsToProcess
+      .filter(d => refresh || !this.cache.has(d))
+      .map(d => ({ path: d, since: this.cache.get(d)?.mtime }));
+
+    if (toFetch.length) {
+      await this.listBatch(toFetch);
+    }
+
+    // Flatten cached items into array
+    for (const d of dirsToProcess) {
+      const files = this.cache.get(d)?.files || [];
       files.forEach(f => {
         const key = joinOsPaths(d, f.name);
         const pathLower = decodeOsPathForDisplay(key).toLowerCase();
+
         items.push({
           // The API gives us for each file:
           //    name
@@ -305,27 +317,20 @@ class TreeData {
           //    mtime
           //    size
           ...f,
+
           // We add these for each item:
           _dir: d,
           _key: key, // path to access file
           _pathLower: pathLower, // only for filtering
-          _pathLowerNoAccents: removeAccents(pathLower),
+          _pathLowerNoAccents: removeAccents(pathLower)
         });
       });
+    }
 
-      if (recursive) {
-        const node = this.findNode(d, this.tree);
-        for (const sub of node?.dirs || []) {
-          await addItemsForDir(joinOsPaths(d, sub.name));
-        }
-      }
-    };
-
-    await addItemsForDir(dir);
     return items;
   }
 
-  findNode(path, node) {
+  findNode(path, node = this.tree) {
     if (!node) return null;
     if (node.path === path) return node;
     for (const d of node.dirs || []) {
