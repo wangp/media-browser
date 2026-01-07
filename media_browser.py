@@ -660,6 +660,54 @@ def list_dir(request: Request, path: OsPath) -> JSONResponse:
         }
     )
 
+@app.post("/api/list-batch")
+def list_batch(request: Request, dirs: List[dict]) -> JSONResponse:
+    """
+    dirs: [
+        {"path": "/some/dir", "since": 1690000000.0},
+        {"path": "/other/dir"}
+    ]
+    """
+    result = {}
+
+    try:
+        for entry in dirs:
+            path = entry["path"]
+            client_mtime = entry.get("since")
+
+            base = safe_path(request.app.state.appstate, path)
+            try:
+                dir_mtime = base.stat().st_mtime
+            except FileNotFoundError:
+                result[path] = {"not_modified": False, "mtime": None, "files": []}
+                continue
+
+            # Check if client already has up-to-date info
+            if client_mtime and dir_mtime <= float(client_mtime):
+                result[path] = {"not_modified": True}
+                continue
+
+            # Enumerate files
+            files = []
+            for p in base.iterdir():
+                if p.name.startswith("."):
+                    continue
+                if is_image(p) or is_video(p):
+                    st = p.stat()
+                    files.append({
+                        "name": encode_ospath(p.name),
+                        "type": "video" if is_video(p) else "image",
+                        "mtime": st.st_mtime,
+                        "size": st.st_size,
+                    })
+
+            result[path] = {"not_modified": False, "mtime": dir_mtime, "files": files}
+
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST)
+
+    return JSONResponse(result)
+
 @app.get("/api/thumb")
 def thumb(request: Request, path: OsPath) -> FileResponse:
     appstate = request.app.state.appstate
