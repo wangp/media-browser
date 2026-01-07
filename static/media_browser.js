@@ -233,7 +233,19 @@ class TreeData {
     try {
       const res = await fetch("/api/tree");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      this.tree = await res.json();
+      const tree = await res.json();
+
+      // Fill in the path field
+      const fillPaths = (node, parentPath = "") => {
+        node.path = parentPath ? joinOsPaths(parentPath, node.name) : node.name;
+        for (const d of node.dirs || []) {
+          fillPaths(d, node.path);
+        }
+      };
+
+      fillPaths(tree);
+
+      this.tree = tree;
       return this.tree;
     } catch (err) {
       console.error("Failed to load tree:", err);

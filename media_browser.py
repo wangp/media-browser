@@ -169,7 +169,6 @@ def decode_ospath(ospath: OsPath) -> str:
 @dataclass(slots=True)
 class TreeNode:
     name: OsPath
-    path: OsPath
     dirs: List["TreeNode"]
 
 def build_virtual_map(state: AppState):
@@ -180,19 +179,18 @@ def build_virtual_map(state: AppState):
         state.virtual_map[key] = root
 
 def build_trees(appstate: AppState) -> List[TreeNode]:
-    def walk(p: Path, virtual_prefix: str):
+    def walk(p: Path):
         node = TreeNode(
             name=encode_ospath(p.name),
-            path=encode_ospath(virtual_prefix),
             dirs=[]
             )
         for d in sorted(p.iterdir()):
             if d.is_dir() and not d.name.startswith("."):
-                node.dirs.append(walk(d, f"{virtual_prefix}/{d.name}"))
+                node.dirs.append(walk(d))
         return node
 
     trees = [
-        walk(path, name)
+        walk(path)
         for name, path in appstate.virtual_map.items()
     ]
     return trees
