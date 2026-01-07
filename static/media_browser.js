@@ -226,8 +226,7 @@ const treeDragbar = new Dragbar({
 class TreeData {
   constructor() {
     this.tree = null;       // cached tree structure from /api/tree
-    this.cache = new Map(); // dir -> { files, mtime }
-    // TODO: cache items
+    this.cache = new Map(); // dir -> { mtime, files, items }
   }
 
   async loadTree() {
@@ -267,7 +266,7 @@ class TreeData {
       if (data[dir].not_modified)
         continue;
       const { mtime, files } = data[dir];
-      this.cache.set(dir, { mtime, files });
+      this.cache.set(dir, { mtime, files, items: undefined });
     }
 
     return data;
@@ -305,12 +304,18 @@ class TreeData {
 
     // Flatten cached items into array
     for (const d of dirsToProcess) {
-      const files = this.cache.get(d)?.files || [];
-      files.forEach(f => {
+      const cacheEntry = this.cache.get(d);
+      if (cacheEntry.items !== undefined) {
+        items.push(...cacheEntry.items);
+        continue;
+      }
+
+      const dirItems = [];
+      cacheEntry.files.forEach(f => {
         const key = joinOsPaths(d, f.name);
         const pathLower = decodeOsPathForDisplay(key).toLowerCase();
 
-        items.push({
+        dirItems.push({
           // The API gives us for each file:
           //    name
           //    type
@@ -325,6 +330,10 @@ class TreeData {
           _pathLowerNoAccents: removeAccents(pathLower)
         });
       });
+
+      cacheEntry.items = dirItems;
+
+      items.push(...dirItems);
     }
 
     return items;
