@@ -1,9 +1,6 @@
 "use strict";
 
-let treeData = null;
 let currentPath = "";
-const dirCache = new Map(); // path -> { mtime, files }
-
 let allItems = [];
 
 let sortType = "name";  // name | mtime | size
@@ -226,122 +223,133 @@ const treeDragbar = new Dragbar({
 
 // ---------------- Tree ----------------
 
-async function loadTree() {
-  try {
-    treeData = await (await fetch("/api/tree")).json();
-  } catch (err) {
-    console.error("Failed to load tree:", err);
-    return;
+class TreeData {
+  constructor() {
+    this.tree = null;
+    this.cache = new Map(); // dir -> { files, mtime }
   }
 
-  dirTree.render(treeData, currentPath);
-}
-
-function openAndLoadDir(path, { highlightItem = null } = {}) {
-  if (path === currentPath) {
-    dirTree.openAndHighlightDir(path, true);
-    if (highlightItem) {
-      grid.highlightThumbForItem(highlightItem);
+  async loadTree() {
+    try {
+      const res = await fetch(`/api/tree`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      this.tree = await res.json();
+      return this.tree;
+    } catch (err) {
+      console.error("Failed to load tree:", err);
+      return null;
     }
-    return;
   }
 
-  loadDir(path);
-  dirTree.openAndHighlightDir(path, false);
-  if (highlightItem) {
-    grid.highlightThumbForItem(highlightItem);
-  } else {
-    grid.schedScrollToNextVisibleThumb();
+  // Return the path of the first top-level directory, or null
+  getFirstDir() {
+    return this.tree?.dirs?.[0]?.path || null;
   }
-}
 
-async function loadDir(newPath, { refresh = false, changeRecursiveMode = false } = {}) {
-  const newItems = [];
-  let applyNewItems = changeRecursiveMode;
+  // If 'refresh' then always check /api/list.
+  async listDir(dir, { refresh = false } = {}) {
+    const cacheEntry = this.cache.get(dir);
 
-  async function addItemsForDir(dir) {
-    const cacheEntry = dirCache.get(dir);
-    let files = [];
+    if (!refresh && cacheEntry) {
+      return cacheEntry.files;
+    }
 
-    if (refresh || !cacheEntry) {
-      let query = new URLSearchParams({ path: dir });
-      if (cacheEntry?.mtime)
-        query.set("since", cacheEntry.mtime);
+    const query = new URLSearchParams({ path: dir });
+    if (cacheEntry?.mtime)
+      query.set("since", cacheEntry.mtime);
 
-      try {
-        const r = await fetch(`/api/list?${query.toString()}`, {
-          cache: "no-store"
+    try {
+      const res = await fetch(`/api/list?${query.toString()}`, {
+        cache: "no-store"
+      });
+
+      if (!res.ok) {
+        console.warn(`Failed to list directory ${dir}: ${res.status}`);
+        this.cache.set(dir, { files: [] });
+        return [];
+      }
+
+      const data = await res.json();
+      let files = [];
+
+      if (data.not_modified && cacheEntry) {
+        // Directory hasn't changed; reuse cached files
+        files = cacheEntry.files;
+      } else {
+        // New or updated directory
+        files = data.files || [];
+        this.cache.set(dir, { files, mtime: data.mtime });
+      }
+
+      return files;
+    } catch (err) {
+      console.warn(`Error fetching directory ${dir}:`, err);
+      this.cache.set(dir, { files: [] }); // cache empty
+      return [];
+    }
+  }
+
+  // Builds items for a directory and its subdirs if requested.
+  // Returns a flat array of items.
+  async buildItems(dir, { recursive = false, refresh = false } = {}) {
+    const items = [];
+    const addItemsForDir = async (d) => {
+      const files = await this.listDir(d, { refresh });
+      files.forEach(f => {
+        const key = joinOsPaths(d, f.name);
+        const pathLower = decodeOsPathForDisplay(key).toLowerCase();
+        items.push({
+          // The API gives us for each file:
+          //    name
+          //    type
+          //    mtime
+          //    size
+          ...f,
+          // We add these for each item:
+          _dir: d,
+          _key: key, // path to access file
+          _pathLower: pathLower, // only for filtering
+          _pathLowerNoAccents: removeAccents(pathLower),
         });
-        if (!r.ok) {
-          console.warn(`Failed to list directory ${dir}: ${r.status}`);
-          files = [];
-          dirCache.set(dir, { files }); // cache empty
-          applyNewItems = true;
-        } else {
-          const data = await r.json();
-          if (data.not_modified && cacheEntry) {
-            // Directory hasn't changed; reuse cached files
-            files = cacheEntry.files;
-          } else {
-            // New or updated directory
-            files = data.files || [];
-            dirCache.set(dir, { files, mtime: data.mtime });
-            applyNewItems = true;
-          }
-        }
-      } catch (err) {
-        console.warn(`Error fetching directory ${dir}:`, err);
-        files = [];
-        dirCache.set(dir, { files }); // cache empty
-        applyNewItems = true;
-      }
-    } else {
-      // Already cached, no refresh
-      files = cacheEntry.files;
-    }
+      });
 
-    files.forEach(f => {
-      const key = joinOsPaths(dir, f.name);
-      const dpath = decodeOsPathForDisplay(key);
-      const pathLower = dpath.toLowerCase();
-      const pathLowerNoAccents = removeAccents(pathLower);
-
-      const item = {
-        // The API gives us for each file:
-        //    name
-        //    type
-        //    mtime
-        //    size
-        ...f,
-
-        // We add these for each item:
-        _dir: dir,
-        _key: key, // path to access file
-        _pathLower: pathLower, // only for filtering
-        _pathLowerNoAccents: pathLowerNoAccents
-      };
-      newItems.push(item);
-    });
-
-    if (recursive) {
-      // Find node in cached treeData to get its children of dir.
-      const node = findTreeNode(dir, treeData);
-      if (node) {
-        for (const d of node.dirs) {
-          const subdir = joinOsPaths(dir, d.name);
-          await addItemsForDir(subdir);
+      if (recursive) {
+        const node = this.findNode(d, this.tree);
+        for (const sub of node?.dirs || []) {
+          await addItemsForDir(joinOsPaths(d, sub.name));
         }
       }
-    }
+    };
+
+    await addItemsForDir(dir);
+    return items;
   }
 
-  await addItemsForDir(newPath);
+  findNode(path, node) {
+    if (!node) return null;
+    if (node.path === path) return node;
+    for (const d of node.dirs || []) {
+      const found = this.findNode(path, d);
+      if (found) return found;
+    }
+    return null;
+  }
+}
 
+const treeDataModel = new TreeData();
+
+// Select the given path and load the items into the grid.
+// If 'changeRecursiveMode' then assume the item list can change, even if the
+// path hasn't.
+async function loadDir(newPath, { refresh = false, changeRecursiveMode = false } = {}) {
+  const newItems = await treeDataModel.buildItems(newPath, { recursive, refresh });
+
+  let applyNewItems = changeRecursiveMode;
   if (newPath !== currentPath) {
+    applyNewItems = true;
     currentPath = newPath;
     grid.resetOpenGroups();
     updateBreadcrumbs(currentPath);
-    applyNewItems = true;
   }
 
   if (applyNewItems) {
@@ -350,14 +358,21 @@ async function loadDir(newPath, { refresh = false, changeRecursiveMode = false }
   }
 }
 
-function findTreeNode(path, node) {
-  if (node.path === path)
-    return node;
-  for (const d of node.dirs) {
-    const r = findTreeNode(path, d);
-    if (r) return r;
+// Open the given path in the dir tree sidebar, and load the items into the
+// grid.
+function openAndLoadDir(path, { highlightItem = null } = {}) {
+  if (path === currentPath) {
+    dirTree.openAndHighlightDir(path, true);
+    if (highlightItem)
+      grid.highlightThumbForItem(highlightItem);
+    return;
   }
-  return null;
+  loadDir(path);
+  dirTree.openAndHighlightDir(path, false);
+  if (highlightItem)
+    grid.highlightThumbForItem(highlightItem);
+  else
+    grid.schedScrollToNextVisibleThumb();
 }
 
 // ---------------- DirTree (view) ----------------
@@ -2093,9 +2108,18 @@ window.addEventListener('orientationchange', resizeMain);
 
 // ---------------- Init ----------------
 
-loadTree().then(() => {
-  const initialDir = treeData.dirs[0]?.path;
-  if (initialDir) {
-    openAndLoadDir(initialDir)
+async function initTree() {
+  try {
+    const tree = await treeDataModel.loadTree();
+    dirTree.render(tree, currentPath);
+
+    const initialDir = treeDataModel.getFirstDir();
+    if (initialDir) {
+      openAndLoadDir(initialDir);
+    }
+  } catch (err) {
+    console.error("Failed to load tree:", err);
   }
-});
+}
+
+initTree();
