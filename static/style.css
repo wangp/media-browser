@@ -68,8 +68,9 @@ button {
   padding: 4px 10px;
   background: var(--bg-btn);
   color: var(--text-main);
-  cursor: pointer;
   white-space: nowrap;
+  user-select: none;
+  cursor: pointer;
   transition: background 0.1s ease;
 }
 
@@ -623,6 +624,7 @@ button.active:hover {
   position: relative;
   z-index: -10; /* under overlay */
   object-fit: contain;
+  user-select: none;
 }
 
 /* fadeable controls */
@@ -670,6 +672,7 @@ button.active:hover {
   flex: 0 0 auto;
   justify-content: flex-end;
   gap: 8px;
+  user-select: none;
 }
 
 .viewer-buttons button {
