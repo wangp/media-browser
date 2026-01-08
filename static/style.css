@@ -627,6 +627,10 @@ button.active:hover {
   user-select: none;
 }
 
+#viewer img.zoomed {
+  object-fit: cover;
+}
+
 /* fadeable controls */
 .viewer-control {
   opacity: 0;

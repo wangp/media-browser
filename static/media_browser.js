@@ -1884,6 +1884,10 @@ class Viewer {
     }
   }
 
+  toggleImageZoom() {
+    this.viewerImg.classList.toggle("zoomed");
+  }
+
   // ---------------- Video Controls ----------------
 
   togglePauseVideo() {
@@ -1991,6 +1995,14 @@ class Viewer {
         case "0":
           e.preventDefault();
           this.adjustVolume(0.05);
+          return;
+      }
+    }
+
+    if (this.viewerImg.style.display !== "none") {
+      switch (e.key) {
+        case "z":
+          this.toggleImageZoom();
           return;
       }
     }
