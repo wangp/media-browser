@@ -2141,7 +2141,7 @@ class Viewer {
       case "a":
         this.toggleAutoAdvance();
         break;
-      case "r":
+      case "s":
         this.toggleShuffle();
         break;
       case "f":
