@@ -624,10 +624,22 @@ button.active:hover {
   position: relative;
   z-index: -10; /* under overlay */
   object-fit: contain;
+  object-position: center center;
   user-select: none;
 }
 
-#viewer img.zoomed {
+#viewer img {
+  cursor: grab;
+  transform-origin: 0 0;
+  transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+
+#viewer img.dragging {
+  cursor: grabbing;
+}
+
+#viewer img.fit-cover {
   object-fit: cover;
 }
 

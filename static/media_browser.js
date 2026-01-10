@@ -1614,16 +1614,34 @@ class Viewer {
     this.viewerFullscreenEntered = false;
     this.toastTimer = null;
 
-    // Mouse & touch tracking
+    // Mouse tracking
     this.lastMouseX = null;
     this.lastMouseY = null;
     this.mousemoveAccum = 0;
     this.wheelAccum = 0;
+
+    // Image zoom/pan
+    this.resetZoomPan();
+
+    this.dragging = false;
+    this.dragLastX = 0;
+    this.dragLastY = 0;
+    this.dragLastTime = 0;
+
+    // Touch tracking
     this.touchStartX = 0;
     this.touchStartY = 0;
     this.touchActive = false;
 
     this.bindUI();
+  }
+
+  resetZoomPan() {
+    this.imgZoom = 1;
+    this.imgPanX = 0;
+    this.imgPanY = 0;
+    this.panVelX = 0;
+    this.panVelY = 0;
   }
 
   // ---------------- Viewer State ----------------
@@ -1668,6 +1686,7 @@ class Viewer {
     this.viewerVideo.load();
     this.viewerVideo.style.display = "none";
 
+    // Destroy previous HLS instance if any
     if (this.currentHls) {
       this.currentHls.destroy();
       this.currentHls = null;
@@ -1701,7 +1720,6 @@ class Viewer {
     this.viewerVideo.removeAttribute("src");
     this.viewerVideo.load();
 
-    // Destroy previous HLS instance if any
     if (this.currentHls) {
       this.currentHls.destroy();
       this.currentHls = null;
@@ -1710,11 +1728,18 @@ class Viewer {
     if (item.type === "video") {
       await this.showVideoItem(item);
     } else {
-      // Show image
-      this.viewerVideo.style.display = "none";
-      this.viewerImg.src = `/api/file?path=${encodeURIComponent(item._key)}`;
-      this.viewerImg.style.display = "block";
+      this.showImageItem(item);
     }
+  }
+
+  showImageItem(item) {
+    this.viewerVideo.style.display = "none";
+    this.viewerImg.style.transform = "";
+    this.viewerImg.style.display = "block";
+
+    this.resetZoomPan();
+
+    this.viewerImg.src = `/api/file?path=${encodeURIComponent(item._key)}`;
   }
 
   async showVideoItem(item) {
@@ -1884,10 +1909,6 @@ class Viewer {
     }
   }
 
-  toggleImageZoom() {
-    this.viewerImg.classList.toggle("zoomed");
-  }
-
   // ---------------- Video Controls ----------------
 
   togglePauseVideo() {
@@ -1948,8 +1969,13 @@ class Viewer {
     // Mouse move
     this.viewerEl.addEventListener("mousemove", e => this.handleMouseMove(e));
 
-    // Wheel
+    // Wheel zoom
     this.viewerEl.addEventListener("wheel", e => this.handleWheel(e), { passive: false });
+
+    // Drag image
+    this.viewerImg.addEventListener("mousedown", e => this.handleDragStart(e));
+    document.addEventListener("mousemove", e => this.handleDragMove(e));
+    document.addEventListener("mouseup", e => this.handleDragEnd(e));
 
     // Touch
     this.viewerEl.addEventListener("touchstart", e => this.handleTouchStart(e), { passive: true });
@@ -1963,6 +1989,8 @@ class Viewer {
       if (fs !== this.viewerEl) this.viewerFullscreenEntered = false;
     });
   }
+
+  // ---------------- Keyboard ----------------
 
   handleKeyDown(e) {
     if (!this.isActive()) return;
@@ -2044,6 +2072,8 @@ class Viewer {
     }
   }
 
+  // ---------------- Mouse move ----------------
+
   handleMouseMove(e) {
     if (!this.isActive()) return;
 
@@ -2070,23 +2100,189 @@ class Viewer {
     }
   }
 
-  handleWheel(e) {
-    if (!this.isActive()) return;
+  // ---------------- Image zoom/pan ----------------
+
+  handleDragStart(e) {
+    if (!this.isActive() || e.button !== 0) return;
+
+    this.dragging = true;
+    this.dragLastX = e.clientX;
+    this.dragLastY = e.clientY;
+    this.dragLastTime = performance.now();
+
+    this.panVelX = 0;
+    this.panVelY = 0;
 
     e.preventDefault();
-    this.wheelAccum += e.deltaY;
+  }
 
-    const threshold = 100;
-    if (this.wheelAccum >= threshold) {
-      if (this.viewerImg.style.display !== "none")
-        this.manualAdvance(1);
-      this.wheelAccum = 0;
-    } else if (this.wheelAccum <= -threshold) {
-      if (this.viewerImg.style.display !== "none")
-        this.manualAdvance(-1);
-      this.wheelAccum = 0;
+  handleDragMove(e) {
+    if (!this.dragging) return;
+
+    const now = performance.now();
+    const dt = Math.max(now - this.dragLastTime, 1);
+
+    const dx = e.clientX - this.dragLastX;
+    const dy = e.clientY - this.dragLastY;
+
+    this.imgPanX += dx;
+    this.imgPanY += dy;
+
+    this.panVelX = dx / dt;
+    this.panVelY = dy / dt;
+
+    this.dragLastX = e.clientX;
+    this.dragLastY = e.clientY;
+    this.dragLastTime = now;
+
+    this.clampPan();
+    this.applyImageTransform();
+  }
+
+  handleDragEnd(e) {
+    if (!this.dragging) return;
+    this.dragging = false;
+
+    const stepInertia = () => {
+      this.imgPanX += this.panVelX * 16; // pixels per frame
+      this.imgPanY += this.panVelY * 16;
+
+      this.clampPan();
+      this.applyImageTransform();
+
+      const PAN_DECAY = 0.92;
+      const PAN_EPS = 0.1;
+
+      this.panVelX *= PAN_DECAY;
+      this.panVelY *= PAN_DECAY;
+
+      if (Math.abs(this.panVelX) > PAN_EPS || Math.abs(this.panVelY) > PAN_EPS) {
+        requestAnimationFrame(stepInertia);
+      }
+    };
+
+    stepInertia();
+  }
+
+  handleWheel(e) {
+    if (!this.isActive()) return;
+    if (this.viewerImg.style.display === "none") return;
+
+    e.preventDefault();
+
+    const rect = this.viewerEl.getBoundingClientRect();
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+
+    const MAX_ZOOM = 10;
+    const MIN_ZOOM = 1;
+    const STEP = 1.1;
+
+    const factor = e.deltaY < 0 ? STEP : 1 / STEP;
+    const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, this.imgZoom * factor));
+    if (newZoom === this.imgZoom) return;
+
+    // Image-space coordinates of cursor
+    const imgX = (cx - this.imgPanX) / this.imgZoom;
+    const imgY = (cy - this.imgPanY) / this.imgZoom;
+
+    // Update zoom
+    this.imgZoom = newZoom;
+
+    // Keep cursor point fixed
+    this.imgPanX = cx - imgX * this.imgZoom;
+    this.imgPanY = cy - imgY * this.imgZoom;
+
+    this.clampPan();
+    this.applyImageTransform();
+  }
+
+  clampPan() {
+    const vw = this.viewerEl.clientWidth;
+    const vh = this.viewerEl.clientHeight;
+
+    const img = this.viewerImg;
+    if (!img || !img.naturalWidth || !img.naturalHeight) return;
+
+    const iw = img.naturalWidth;
+    const ih = img.naturalHeight;
+
+    // object-fit resolution
+    const fit = getComputedStyle(img).objectFit || "contain";
+    const scale0 = fit === "cover"
+      ? Math.max(vw / iw, vh / ih)
+      : Math.min(vw / iw, vh / ih);
+
+    const baseW = iw * scale0;
+    const baseH = ih * scale0;
+    const baseX = (vw - baseW) / 2;
+    const baseY = (vh - baseH) / 2;
+
+    const scaledW = baseW * this.imgZoom;
+    const scaledH = baseH * this.imgZoom;
+
+    // X axis
+    let minX, maxX;
+    if (scaledW >= vw) {
+      // image larger than viewport
+      minX = vw - (baseX * this.imgZoom + scaledW);
+      maxX = -baseX * this.imgZoom;
+    } else {
+      // image smaller than viewport
+      minX = -baseX * this.imgZoom;
+      maxX = vw - (baseX * this.imgZoom + scaledW);
+    }
+    if (minX > maxX) [minX, maxX] = [maxX, minX];
+
+    if (this.imgPanX < minX) {
+      this.imgPanX = minX;
+      if (this.panVelX < 0) this.panVelX = 0;
+    } else if (this.imgPanX > maxX) {
+      this.imgPanX = maxX;
+      if (this.panVelX > 0) this.panVelX = 0;
+    }
+
+    // Y axis
+    let minY, maxY;
+    if (scaledH >= vh) {
+      minY = vh - (baseY * this.imgZoom + scaledH);
+      maxY = -baseY * this.imgZoom;
+    } else {
+      minY = -baseY * this.imgZoom;
+      maxY = vh - (baseY * this.imgZoom + scaledH);
+    }
+    if (minY > maxY) [minY, maxY] = [maxY, minY];
+
+    if (this.imgPanY < minY) {
+      this.imgPanY = minY;
+      if (this.panVelY < 0) this.panVelY = 0;
+    } else if (this.imgPanY > maxY) {
+      this.imgPanY = maxY;
+      if (this.panVelY > 0) this.panVelY = 0;
     }
   }
+
+  applyImageTransform() {
+    this.viewerImg.style.transform =
+      `translate(${this.imgPanX}px, ${this.imgPanY}px) scale(${this.imgZoom})`;
+  }
+
+  toggleImageZoom() {
+    if (!this.isActive()) return;
+    if (this.viewerImg.style.display === "none") return;
+
+    if (this.imgZoom == 1) {
+      this.viewerImg.classList.toggle("fit-cover");
+    }
+
+    this.imgZoom = 1;
+    this.imgPanX = 0;
+    this.imgPanY = 0;
+
+    this.applyImageTransform();
+  }
+
+  // ---------------- Touch ----------------
 
   handleTouchStart(e) {
     if (!this.isActive()) return;
