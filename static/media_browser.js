@@ -1675,6 +1675,8 @@ class Viewer {
     this.viewerEl.style.display = "block";
     this.hideViewerControls();
     this.showItem(this.navItems[this.navIndex]);
+
+    this.wheelAccum = 0;
   }
 
   close() {
@@ -1939,7 +1941,6 @@ class Viewer {
     this.lastMouseX = null;
     this.lastMouseY = null;
     this.mousemoveAccum = 0;
-    this.wheelAccum = 0;
 
     this.viewerControlsVisible = true;
     this.viewerEl.querySelectorAll(".viewer-control")
@@ -2263,6 +2264,22 @@ class Viewer {
 
     e.preventDefault();
 
+    if (!e.ctrlKey) {
+      this.wheelAccum += e.deltaY;
+
+      const THRESHOLD = 100;
+      while (this.wheelAccum <= -THRESHOLD) {
+        this.manualAdvance(-1);
+        this.wheelAccum += THRESHOLD;
+      }
+      while (this.wheelAccum >= THRESHOLD) {
+        this.manualAdvance(1);
+        this.wheelAccum -= THRESHOLD;
+      }
+      return;
+    }
+
+    // Ctrl + wheel -> zooming
     const rect = this.viewerEl.getBoundingClientRect();
     const cx = e.clientX - rect.left;
     const cy = e.clientY - rect.top;
