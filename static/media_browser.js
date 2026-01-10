@@ -2271,14 +2271,32 @@ class Viewer {
     if (!this.isActive()) return;
     if (this.viewerImg.style.display === "none") return;
 
-    if (this.imgZoom == 1) {
-      this.viewerImg.classList.toggle("fit-cover");
+    const vw = this.viewerEl.clientWidth;
+    const vh = this.viewerEl.clientHeight;
+    const iw = this.viewerImg.naturalWidth;
+    const ih = this.viewerImg.naturalHeight;
+
+    if (!iw || !ih) return;
+
+    if (this.imgZoom !== 1) {
+      // Reset to default contain mode
+      this.imgZoom = 1;
+      this.imgPanX = 0;
+      this.imgPanY = 0;
+    } else {
+      // Cover simulation relative to contain mode
+      const scaleContain = Math.min(vw / iw, vh / ih);
+      const scaleCover = Math.max(vw / iw, vh / ih);
+      const zoomFactor = scaleCover / scaleContain;
+      const scaledW = iw * zoomFactor * scaleContain;
+      const scaledH = ih * zoomFactor * scaleContain;
+
+      this.imgZoom = zoomFactor;
+      this.imgPanX = (vw - scaledW) / 2;
+      this.imgPanY = (vh - scaledH) / 2;
     }
 
-    this.imgZoom = 1;
-    this.imgPanX = 0;
-    this.imgPanY = 0;
-
+    this.clampPan();
     this.applyImageTransform();
   }
 

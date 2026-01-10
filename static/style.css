@@ -639,10 +639,6 @@ button.active:hover {
   cursor: grabbing;
 }
 
-#viewer img.fit-cover {
-  object-fit: cover;
-}
-
 /* fadeable controls */
 .viewer-control {
   opacity: 0;
