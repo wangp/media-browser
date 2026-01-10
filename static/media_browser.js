@@ -1599,17 +1599,20 @@ class Viewer {
     this.navLeftEl = this.viewerEl.querySelector(".viewer-nav.left");
     this.navRightEl = this.viewerEl.querySelector(".viewer-nav.right");
     this.closeViewerBtn = this.viewerEl.querySelector(".close-btn");
+    this.autoAdvanceBtn = this.viewerEl.querySelector(".autoadvance-btn");
     this.shuffleBtn = this.viewerEl.querySelector(".shuffle-btn");
-    this.slideBtn = this.viewerEl.querySelector(".slide-btn");
     this.fullscreenBtn = this.viewerEl.querySelector(".fullscreen-btn");
 
     // State
     this.navItems = [];
     this.navIndex = 0;
+    this.autoAdvanceActive = false;
+    this.autoAdvanceSuspendCount = 0;
+    this.autoAdvanceTimer = null;
+    this.videoEndHandler = null;
     this.shuffleEnabled = false;
     this.shuffleOrder = null;
     this.currentHls = null;
-    this.slideTimer = null;
     this.viewerControlsVisible = false;
     this.viewerFullscreenEntered = false;
     this.toastTimer = null;
@@ -1675,7 +1678,10 @@ class Viewer {
   }
 
   close() {
-    this.disarmSlideTimer();
+    this.disarmAutoAdvance();
+    this.autoAdvanceActive = false;
+    this.autoAdvanceBtn.classList.remove("active");
+
     this.hideViewerControls();
 
     this.viewerEl.style.display = "none";
@@ -1713,6 +1719,8 @@ class Viewer {
   // ---------------- Item Display ----------------
 
   async showItem(item) {
+    this.disarmAutoAdvance();
+
     this.viewerTitleEl.textContent = decodeOsPathForDisplay(item.name);
 
     // Cancel previous video if any
@@ -1730,6 +1738,9 @@ class Viewer {
     } else {
       this.showImageItem(item);
     }
+
+    if (this.autoAdvanceActive)
+      this.armAutoAdvance();
   }
 
   showImageItem(item) {
@@ -1749,10 +1760,15 @@ class Viewer {
     const ext = item.name.split(".").pop().toLowerCase();
     const commonExts = ["mp4", "m4v", "webm", "ogg", "ogv", "mkv"];
 
+    let hlsPlayback = false;
+    let schedAdvanceAfterError = false;
+
     if (commonExts.includes(ext)) {
       try {
         this.viewerVideo.src = `/api/file?path=${encodeURIComponent(item._key)}`;
         await this.viewerVideo.play();
+        if (this.autoAdvanceActive)
+          this.armAutoAdvance();
         return;
       } catch {
         console.warn("Native playback failed, falling back to HLS");
@@ -1762,31 +1778,51 @@ class Viewer {
     try {
       const res = await fetch(`/api/start_hls?path=${encodeURIComponent(item._key)}`);
       const data = await res.json();
+
       if (!data.playlist) {
         this.showToast(data.error || "No playlist returned", 3000);
         return;
       }
 
-      let hlsStarted = false;
       if (this.viewerVideo.canPlayType("application/vnd.apple.mpegurl")) {
         this.viewerVideo.src = data.playlist;
         await this.viewerVideo.play();
-        hlsStarted = true;
+        hlsPlayback = true;
       } else if (window.Hls?.isSupported()) {
         this.currentHls = new Hls();
         this.currentHls.loadSource(data.playlist);
         this.currentHls.attachMedia(this.viewerVideo);
         this.currentHls.on(Hls.Events.MANIFEST_PARSED, () => this.viewerVideo.play());
-        hlsStarted = true;
+        hlsPlayback = true;
+
+        // HLS fatal errors
+        this.currentHls.on(Hls.Events.ERROR, (event, data) => {
+          if (data.fatal) {
+            console.warn("HLS fatal error:", data);
+            this.showToast("HLS playback error", 3000);
+            if (this.autoAdvanceActive) {
+              this.armAutoAdvanceTimer(5000);
+            }
+          }
+        });
       } else {
         this.showToast("Hls.js not loaded, cannot play HLS video", 3000);
+        schedAdvanceAfterError = true;
       }
-
-      if (hlsStarted)
-        this.showToast("HLS playback");
     } catch (e) {
       console.error("Failed to start HLS stream", e);
-      this.showToast("Failed to start HLS stream: " + e.message, 3000);
+      this.showToast("Failed to start HLS: " + e.message, 3000);
+      schedAdvanceAfterError = true;
+    }
+
+    if (hlsPlayback)
+      this.showToast("HLS playback");
+
+    if (this.autoAdvanceActive) {
+      if (schedAdvanceAfterError)
+        this.armAutoAdvanceTimer(5000);
+      else
+        this.armAutoAdvance();
     }
   }
 
@@ -1822,7 +1858,6 @@ class Viewer {
 
   manualAdvance(delta, showUI) {
     this.viewerNav(delta);
-    if (this.slideTimer) this.armSlideTimer();
 
     if (showUI) {
       this.showViewerControls();
@@ -1834,6 +1869,67 @@ class Viewer {
       const navEl = delta < 0 ? this.navLeftEl : this.navRightEl;
       navEl.classList.add("active");
       setTimeout(() => navEl.classList.remove("active"), 100);
+    }
+  }
+
+  // ---------------- Auto-advance ----------------
+
+  armAutoAdvance() {
+    if (!this.autoAdvanceActive) return;
+    this.disarmAutoAdvance();
+
+    const img = this.viewerImg;
+    const vid = this.viewerVideo;
+
+    if (img && img.style.display === "block") {
+      this.armAutoAdvanceTimer(3000);
+      return;
+    }
+
+    if (vid.style.display === "block") {
+      if (vid.ended) {
+        this.armAutoAdvanceTimer(2000);
+        return;
+      }
+
+      this.videoEndHandler = () => {
+        if (this.autoAdvanceActive)
+          this.armAutoAdvanceTimer(2000);
+      };
+      this.viewerVideo.addEventListener("ended", this.videoEndHandler, { once: true });
+    }
+  }
+
+  armAutoAdvanceTimer(ms) {
+    clearTimeout(this.autoAdvanceTimer);
+    this.autoAdvanceTimer = setTimeout(() => { this.viewerNav(1); }, ms);
+  }
+
+  disarmAutoAdvance() {
+    clearTimeout(this.autoAdvanceTimer);
+    this.autoAdvanceTimer = null;
+
+    if (this.viewerVideo && this.videoEndHandler) {
+      this.viewerVideo.removeEventListener("ended", this.videoEndHandler);
+      this.videoEndHandler = null;
+    }
+  }
+
+  suspendAutoAdvance() {
+    if (!this.autoAdvanceActive) return;
+
+    this.autoAdvanceSuspendCount++;
+    this.disarmAutoAdvance();
+  }
+
+  resumeAutoAdvance() {
+    if (!this.autoAdvanceActive) return;
+    if (this.autoAdvanceSuspendCount > 0) {
+      this.autoAdvanceSuspendCount--;
+    }
+
+    if (this.autoAdvanceSuspendCount === 0) {
+      this.armAutoAdvance();
     }
   }
 
@@ -1857,6 +1953,20 @@ class Viewer {
       .forEach(el => el.classList.remove("show"));
   }
 
+  toggleAutoAdvance() {
+    if (!this.isActive()) return;
+
+    this.autoAdvanceActive = !this.autoAdvanceActive;
+
+    if (this.autoAdvanceActive)
+      this.armAutoAdvance();
+    else
+      this.disarmAutoAdvance();
+
+    this.autoAdvanceBtn.classList.toggle("active", this.autoAdvanceActive);
+    this.showToast(this.autoAdvanceActive ? "Auto-advance enabled" : "Auto-advance disabled");
+  }
+
   toggleShuffle() {
     if (!this.isActive()) return;
 
@@ -1867,34 +1977,6 @@ class Viewer {
 
     this.shuffleBtn.classList.toggle("active", this.shuffleEnabled);
     this.showToast(this.shuffleEnabled ? "Shuffle enabled" : "Shuffle disabled");
-  }
-
-  toggleSlide() {
-    if (!this.isActive()) return;
-
-    if (!this.slideTimer)
-      this.armSlideTimer();
-    else
-      this.disarmSlideTimer();
-
-    this.showToast(this.slideTimer ? "Slideshow started" : "Slideshow stopped");
-  }
-
-  armSlideTimer() {
-    clearTimeout(this.slideTimer);
-    this.slideTimer = setTimeout(() => {
-      this.viewerNav(1);
-      this.armSlideTimer();
-    }, 3000);
-
-    this.slideBtn.classList.add("active");
-  }
-
-  disarmSlideTimer() {
-    clearTimeout(this.slideTimer);
-    this.slideTimer = null;
-
-    this.slideBtn.classList.remove("active");
   }
 
   toggleFullscreen() {
@@ -1912,10 +1994,14 @@ class Viewer {
   // ---------------- Video Controls ----------------
 
   togglePauseVideo() {
-    if (this.viewerVideo.paused)
+    if (this.viewerVideo.paused) {
       this.viewerVideo.play();
-    else
+      if (this.autoAdvanceActive)
+        this.armAutoAdvance();
+    } else {
       this.viewerVideo.pause();
+      this.disarmAutoAdvance();
+    }
   }
 
   seekVideo(deltaSecs) {
@@ -1958,8 +2044,8 @@ class Viewer {
     this.navLeftEl.addEventListener("click", () => this.manualAdvance(-1));
     this.navRightEl.addEventListener("click", () => this.manualAdvance(1));
     this.closeViewerBtn.addEventListener("click", () => this.close());
+    this.autoAdvanceBtn.addEventListener("click", () => this.toggleAutoAdvance());
     this.shuffleBtn.addEventListener("click", () => this.toggleShuffle());
-    this.slideBtn.addEventListener("click", () => this.toggleSlide());
     this.fullscreenBtn.addEventListener("click", () => this.toggleFullscreen());
 
     // Keyboard
@@ -2052,11 +2138,11 @@ class Viewer {
       case "n":
         this.manualAdvance(1, true);
         break;
+      case "a":
+        this.toggleAutoAdvance();
+        break;
       case "r":
         this.toggleShuffle();
-        break;
-      case "s":
-        this.toggleSlide();
         break;
       case "f":
         this.toggleFullscreen();
@@ -2107,6 +2193,8 @@ class Viewer {
 
   handleDragStart(e) {
     if (!this.isActive() || e.button !== 0) return;
+
+    this.suspendAutoAdvance();
 
     this.dragging = true;
     this.dragLastX = e.clientX;
@@ -2165,6 +2253,8 @@ class Viewer {
     };
 
     stepInertia();
+
+    this.resumeAutoAdvance();
   }
 
   handleWheel(e) {
@@ -2317,6 +2407,8 @@ class Viewer {
     if (!this.isActive()) return;
     if (e.touches.length !== 1) return;
 
+    this.suspendAutoAdvance();
+
     const t = e.touches[0];
     this.touchStartX = t.clientX;
     this.touchStartY = t.clientY;
@@ -2328,6 +2420,7 @@ class Viewer {
 
   handleTouchMove(e) {
     if (!this.touchActive) return;
+    this.suspendAutoAdvance();
     if (e.touches.length !== 1) return;
 
     const t = e.touches[0];
@@ -2337,6 +2430,8 @@ class Viewer {
   handleTouchEnd(e) {
     if (!this.touchActive) return;
     this.touchActive = false;
+
+    this.resumeAutoAdvance();
 
     clearTimeout(this.hideTimer);
     this.hideTimer = setTimeout(() => this.hideViewerControls(), 1000);

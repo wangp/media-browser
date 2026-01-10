@@ -695,11 +695,11 @@ button.active:hover {
   transition: background 0.2s ease;
 }
 
-.viewer-buttons .slide-btn::before {
+.viewer-buttons .autoadvance-btn::before {
   content: "▶";
 }
 
-.viewer-buttons .slide-btn.active::before {
+.viewer-buttons .autoadvance-btn.active::before {
   content: "⏸";
 }
 
