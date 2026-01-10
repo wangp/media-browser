@@ -1982,6 +1982,9 @@ class Viewer {
     this.viewerEl.addEventListener("touchmove", e => this.handleTouchMove(e), { passive: true });
     this.viewerEl.addEventListener("touchend", e => this.handleTouchEnd(e), { passive: true });
 
+    // Viewport resize
+    window.addEventListener("resize", () => this.updateZoomPanForViewport());
+
     // Fullscreen change
     document.addEventListener("fullscreenchange", () => {
       const fs = document.fullscreenElement;
@@ -2295,6 +2298,14 @@ class Viewer {
       this.imgPanX = (vw - scaledW) / 2;
       this.imgPanY = (vh - scaledH) / 2;
     }
+
+    this.clampPan();
+    this.applyImageTransform();
+  }
+
+  updateZoomPanForViewport() {
+    if (!this.isActive()) return;
+    if (this.viewerImg.style.display === "none") return;
 
     this.clampPan();
     this.applyImageTransform();
