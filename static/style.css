@@ -614,6 +614,7 @@ button.active:hover {
   background: #000;
   display: none;
   z-index: 1000;
+  touch-action: none;
 }
 
 #viewer img,

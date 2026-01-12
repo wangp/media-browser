@@ -1634,6 +1634,12 @@ class Viewer {
     // Touch tracking
     this.touchStartX = 0;
     this.touchStartY = 0;
+    this.touchMode = null; // "swipe" | "pan" | "zoom"
+    this.touchStartZoom = 1;
+    this.touchStartDist = 0;
+    this.touchStartCenter = { x: 0, y: 0 };
+    this.touchStartImagePoint = { x: 0, y: 0 };
+    this.touchStartPan = { x: 0, y: 0 };
     this.touchActive = false;
 
     this.bindUI();
@@ -2065,9 +2071,9 @@ class Viewer {
     document.addEventListener("mouseup", e => this.handleDragEnd(e));
 
     // Touch
-    this.viewerEl.addEventListener("touchstart", e => this.handleTouchStart(e), { passive: true });
-    this.viewerEl.addEventListener("touchmove", e => this.handleTouchMove(e), { passive: true });
-    this.viewerEl.addEventListener("touchend", e => this.handleTouchEnd(e), { passive: true });
+    this.viewerEl.addEventListener("touchstart", e => this.handleTouchStart(e), { passive: false });
+    this.viewerEl.addEventListener("touchmove", e => this.handleTouchMove(e), { passive: false });
+    this.viewerEl.addEventListener("touchend", e => this.handleTouchEnd(e), { passive: false });
 
     // Viewport resize
     window.addEventListener("resize", () => this.updateZoomPanForViewport());
@@ -2192,30 +2198,26 @@ class Viewer {
 
   // ---------------- Image zoom/pan ----------------
 
-  handleDragStart(e) {
-    if (!this.isActive() || e.button !== 0) return;
-
+  panStart(x, y) {
     this.suspendAutoAdvance();
 
     this.dragging = true;
-    this.dragLastX = e.clientX;
-    this.dragLastY = e.clientY;
+    this.dragLastX = x;
+    this.dragLastY = y;
     this.dragLastTime = performance.now();
 
     this.panVelX = 0;
     this.panVelY = 0;
-
-    e.preventDefault();
   }
 
-  handleDragMove(e) {
+  panMove(x, y) {
     if (!this.dragging) return;
 
     const now = performance.now();
     const dt = Math.max(now - this.dragLastTime, 1);
 
-    const dx = e.clientX - this.dragLastX;
-    const dy = e.clientY - this.dragLastY;
+    const dx = x - this.dragLastX;
+    const dy = y - this.dragLastY;
 
     this.imgPanX += dx;
     this.imgPanY += dy;
@@ -2223,19 +2225,22 @@ class Viewer {
     this.panVelX = dx / dt;
     this.panVelY = dy / dt;
 
-    this.dragLastX = e.clientX;
-    this.dragLastY = e.clientY;
+    this.dragLastX = x;
+    this.dragLastY = y;
     this.dragLastTime = now;
 
     this.clampPan();
     this.applyImageTransform();
   }
 
-  handleDragEnd(e) {
+  panEnd() {
     if (!this.dragging) return;
     this.dragging = false;
 
     const stepInertia = () => {
+      // transform updates can happen while dragging again
+      if (this.dragging || this.touchActive) return;
+
       this.imgPanX += this.panVelX * 16; // pixels per frame
       this.imgPanY += this.panVelY * 16;
 
@@ -2256,6 +2261,36 @@ class Viewer {
     stepInertia();
 
     this.resumeAutoAdvance();
+  }
+
+  setZoomAroundImagePoint(newZoom, imgPoint, screenPoint) {
+    const MAX_ZOOM = 10;
+    const MIN_ZOOM = 1;
+    newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, newZoom));
+
+    // Desired: screenPoint = imgPoint * newZoom + newPan
+    // => newPan = screenPoint - imgPoint * newZoom
+    this.imgPanX = screenPoint.x - imgPoint.x * newZoom;
+    this.imgPanY = screenPoint.y - imgPoint.y * newZoom;
+
+    this.imgZoom = newZoom;
+
+    this.clampPan();
+    this.applyImageTransform();
+  }
+
+  handleDragStart(e) {
+    if (!this.isActive() || e.button !== 0) return;
+    e.preventDefault();
+    this.panStart(e.clientX, e.clientY);
+  }
+
+  handleDragMove(e) {
+    this.panMove(e.clientX, e.clientY);
+  }
+
+  handleDragEnd(e) {
+    this.panEnd();
   }
 
   handleWheel(e) {
@@ -2289,22 +2324,17 @@ class Viewer {
     const STEP = 1.1;
 
     const factor = e.deltaY < 0 ? STEP : 1 / STEP;
-    const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, this.imgZoom * factor));
-    if (newZoom === this.imgZoom) return;
+    const newZoom = this.imgZoom * factor;
 
     // Image-space coordinates of cursor
-    const imgX = (cx - this.imgPanX) / this.imgZoom;
-    const imgY = (cy - this.imgPanY) / this.imgZoom;
+    // screenPoint = imgPoint * zoom + pan
+    // imgPoint = (screenPoint - pan) / zoom
+    const imgPoint = {
+      x: (cx - this.imgPanX) / this.imgZoom,
+      y: (cy - this.imgPanY) / this.imgZoom
+    };
 
-    // Update zoom
-    this.imgZoom = newZoom;
-
-    // Keep cursor point fixed
-    this.imgPanX = cx - imgX * this.imgZoom;
-    this.imgPanY = cy - imgY * this.imgZoom;
-
-    this.clampPan();
-    this.applyImageTransform();
+    this.setZoomAroundImagePoint(newZoom, imgPoint, { x: cx, y: cy });
   }
 
   clampPan() {
@@ -2422,14 +2452,34 @@ class Viewer {
 
   handleTouchStart(e) {
     if (!this.isActive()) return;
-    if (e.touches.length !== 1) return;
 
     this.suspendAutoAdvance();
-
-    const t = e.touches[0];
-    this.touchStartX = t.clientX;
-    this.touchStartY = t.clientY;
     this.touchActive = true;
+
+    if (e.touches.length === 1) {
+      const t = e.touches[0];
+      this.touchStartX = t.clientX;
+      this.touchStartY = t.clientY;
+
+      if (this.imgZoom > 1) {
+        this.touchMode = "pan";
+        this.panStart(t.clientX, t.clientY);
+      } else {
+        this.touchMode = "swipe";
+      }
+    } else if (e.touches.length === 2) {
+      this.touchMode = "zoom";
+      this.touchStartDist = this.getTouchDist(e.touches);
+      this.touchStartZoom = this.imgZoom;
+      this.touchStartCenter = this.getTouchCenter(e.touches);
+      // Determine the point on the image under the centroid
+      // imgPoint = (screenPoint - pan) / zoom
+      // Note: touchStartCenter is relative to viewerEl
+      this.touchStartImagePoint = {
+        x: (this.touchStartCenter.x - this.imgPanX) / this.imgZoom,
+        y: (this.touchStartCenter.y - this.imgPanY) / this.imgZoom
+      };
+    }
 
     this.showViewerControls();
     clearTimeout(this.hideTimer);
@@ -2438,32 +2488,79 @@ class Viewer {
   handleTouchMove(e) {
     if (!this.touchActive) return;
     this.suspendAutoAdvance();
-    if (e.touches.length !== 1) return;
 
-    const t = e.touches[0];
-    // could accumulate dx/dy for gestures if needed
+    // Prevent default to stop scrolling/zooming the whole page
+    if (e.cancelable) e.preventDefault();
+
+    if (this.touchMode === "pan" && e.touches.length === 1) {
+      const t = e.touches[0];
+      this.panMove(t.clientX, t.clientY);
+
+    } else if (this.touchMode === "zoom" && e.touches.length === 2) {
+      const newDist = this.getTouchDist(e.touches);
+      const newCenter = this.getTouchCenter(e.touches);
+
+      // 1. Calculate new zoom level
+      const scale = newDist / this.touchStartDist;
+      const newZoom = this.touchStartZoom * scale;
+
+      // 2. Adjust pan to keep the image point fixed relative to the new center
+      this.setZoomAroundImagePoint(newZoom, this.touchStartImagePoint, newCenter);
+    }
   }
 
   handleTouchEnd(e) {
     if (!this.touchActive) return;
-    this.touchActive = false;
 
-    this.resumeAutoAdvance();
+    // specific handling for swipe end
+    if (this.touchMode === "swipe" && e.changedTouches.length > 0) {
+      const t = e.changedTouches[0];
+      const dx = t.clientX - this.touchStartX;
+      const dy = t.clientY - this.touchStartY;
 
-    clearTimeout(this.hideTimer);
-    this.hideTimer = setTimeout(() => this.hideViewerControls(), 1000);
-
-    const t = e.changedTouches[0];
-    const dx = t.clientX - this.touchStartX;
-    const dy = t.clientY - this.touchStartY;
-
-    // horizontal swipe detection
-    if (Math.abs(dx) >= 50 && Math.abs(dx) > 2 * Math.abs(dy)) {
-      if (dx < 0)
-        this.viewerNav(1);
-      else
-        this.viewerNav(-1);
+      // Horizontal swipe detection
+      if (Math.abs(dx) >= 50 && Math.abs(dx) > 2 * Math.abs(dy)) {
+        if (dx < 0) this.viewerNav(1);
+        else this.viewerNav(-1);
+      }
+    } else if (this.touchMode === "pan") {
+      this.panEnd();
     }
+
+    if (e.touches.length === 0) {
+      this.touchActive = false;
+      this.touchMode = null;
+      this.resumeAutoAdvance();
+      clearTimeout(this.hideTimer);
+      this.hideTimer = setTimeout(() => this.hideViewerControls(), 1000);
+    } else if (e.touches.length === 1) {
+      // Switch to pan mode if we dropped from 2 fingers to 1?
+      // Or just reset for simplicity.
+      // For now, let's reset mode to avoid jumps, user can lift and re-touch.
+      this.touchMode = null;
+    }
+  }
+
+  getTouchDist(touches) {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.hypot(dx, dy);
+  }
+
+  getTouchCenter(touches) {
+    const x = (touches[0].clientX + touches[1].clientX) / 2;
+    const y = (touches[0].clientY + touches[1].clientY) / 2;
+    // We need coordinates relative to viewerEl if possible, but clientX/Y works
+    // if we use clientX/Y consistently in calculations (which we do).
+    // But for Pan calculation we used viewport relative logic implicitly
+    // since imgPanX is translation.
+    // The handleWheel logic used getBoundingClientRect.
+    // Let's adjust to be relative to viewerEl to be safe and consistent with handleWheel.
+    const rect = this.viewerEl.getBoundingClientRect();
+    return {
+      x: x - rect.left,
+      y: y - rect.top
+    };
   }
 }
 
