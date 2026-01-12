@@ -1672,6 +1672,15 @@ class Viewer {
     this.navItems = navItems;
     this.navIndex = idx;
 
+    // Hide nav arrows if only one item
+    if (this.navItems.length < 2) {
+      this.navLeftEl.style.display = "none";
+      this.navRightEl.style.display = "none";
+    } else {
+      this.navLeftEl.style.display = "";
+      this.navRightEl.style.display = "";
+    }
+
     if (this.shuffleEnabled) {
       this.makeShuffleOrder(this.navIndex);
     } else {
