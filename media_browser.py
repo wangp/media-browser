@@ -12,6 +12,7 @@ import subprocess
 import sys
 import threading
 import time
+from fractions import Fraction
 from pathlib import Path
 
 import uvicorn
@@ -358,6 +359,20 @@ class VideoInfo:
     video: List[StreamInfo]
     audio: List[StreamInfo]
 
+@dataclass(slots=True)
+class ExtendedVideoInfo:
+    size: int
+    duration: float
+    video_codec: str
+    width: int
+    height: int
+    frame_rate: str
+    video_bitrate: int
+    audio_codec: str
+    channels: int
+    sample_rate: int
+    audio_bitrate: int
+
 def get_video_info(src: Path) -> Optional[VideoInfo]:
     cmd = [
         "ffprobe", "-v", "error",
@@ -394,6 +409,86 @@ def get_video_info(src: Path) -> Optional[VideoInfo]:
         return VideoInfo(ext=ext, video=video, audio=audio)
 
     return None
+
+def get_extended_video_info(src: Path) -> Optional[ExtendedVideoInfo]:
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=size,duration",
+        "-show_entries", "stream=index,codec_type,codec_name,width,height,avg_frame_rate,bit_rate,channels,sample_rate",
+        "-of", "json",
+        str(src),
+    ]
+    try:
+        out = subprocess.check_output(cmd)
+        data = json.loads(out)
+    except Exception:
+        return None
+
+    fmt = data.get("format", {})
+    try:
+        size = int(fmt.get("size", 0))
+        duration = float(fmt.get("duration", 0))
+    except (ValueError, TypeError):
+        size = 0
+        duration = 0.0
+
+    video_codec = ""
+    width = 0
+    height = 0
+    frame_rate = ""
+    video_bitrate = 0
+
+    audio_codec = ""
+    channels = 0
+    sample_rate = 0
+    audio_bitrate = 0
+
+    for s in data.get("streams", []):
+        ctype = s.get("codec_type")
+        if ctype == "video" and not video_codec:
+            video_codec = s.get("codec_name", "")
+            width = int(s.get("width", 0))
+            height = int(s.get("height", 0))
+            frame_rate = frame_rate_to_str(s.get("avg_frame_rate", ""))
+            try:
+                video_bitrate = int(s.get("bit_rate", 0))
+            except (ValueError, TypeError):
+                pass
+        elif ctype == "audio" and not audio_codec:
+            audio_codec = s.get("codec_name", "")
+            channels = int(s.get("channels", 0))
+            try:
+                sample_rate = int(s.get("sample_rate", 0))
+                audio_bitrate = int(s.get("bit_rate", 0))
+            except (ValueError, TypeError):
+                pass
+
+    return ExtendedVideoInfo(
+        size=size,
+        duration=duration,
+        video_codec=video_codec,
+        width=width,
+        height=height,
+        frame_rate=frame_rate,
+        video_bitrate=video_bitrate,
+        audio_codec=audio_codec,
+        channels=channels,
+        sample_rate=sample_rate,
+        audio_bitrate=audio_bitrate,
+    )
+
+def frame_rate_to_str(value) -> str:
+    """
+    Convert ffprobe frame rate (e.g. '30000/1001') to a decimal string.
+    Returns '' if unavailable or invalid.
+    """
+    try:
+        if isinstance(value, str) and "/" in value:
+            # keep a reasonable precision, strip trailing zeros
+            return f"{float(Fraction(value)):.6f}".rstrip("0").rstrip(".")
+        return str(float(value))
+    except (ValueError, ZeroDivisionError, TypeError):
+        return ""
 
 # suitable for HLS
 HLS_VIDEO_COPY_CODECS = {"h264", "avc1"}
@@ -748,6 +843,35 @@ def hls_segment(request: Request, key: str, segment: str):
         return FileResponse(path, media_type="video/MP2T")
     else:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+@app.get("/api/video_info")
+def video_info(request: Request, path: OsPath) -> dict:
+    appstate = request.app.state.appstate
+    src = safe_path(appstate, path)
+    if not src.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    info = get_extended_video_info(src)
+    if not info:
+        return {"error": "Could not retrieve video info"}
+
+    return {
+        "size": info.size,
+        "duration": info.duration,
+        "video": {
+            "codec": info.video_codec,
+            "width": info.width,
+            "height": info.height,
+            "frame_rate": info.frame_rate,
+            "bitrate": info.video_bitrate,
+        },
+        "audio": {
+            "codec": info.audio_codec,
+            "channels": info.channels,
+            "sample_rate": info.sample_rate,
+            "bitrate": info.audio_bitrate,
+        }
+    }
 
 # ---------------- Main ----------------
 

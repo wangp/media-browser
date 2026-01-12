@@ -1381,6 +1381,18 @@ contextMenu.addItem("Play HLS stream", "play-hls",
     return thumbEl._item?.type === "video";
   });
 
+contextMenu.addItem("Show video info", "show-info",
+  async (thumbEl, clickedEl) => {
+    const item = thumbEl._item;
+    if (!item || item.type !== "video") return;
+
+    contextMenu.hide();
+    await showVideoInfo(item, clickedEl);
+  },
+  (thumbEl) => {
+    return thumbEl._item?.type === "video";
+  });
+
 async function copyToClipboard(text) {
   if (navigator.clipboard?.writeText) {
     try {
@@ -1428,6 +1440,8 @@ class Tooltip {
     this.hoverEl = null;    // element currently under cursor
     this.tooltipEl = null;  // element currently displayed in tooltip
     this.tooltipVisible = false;
+    this.isPersistent = false;
+    this.persistentCloseHandler = null;
 
     this.showTimer = null;
     this.hideTimer = null;
@@ -1438,14 +1452,33 @@ class Tooltip {
   setEnabled(enabled) {
     this.enabled = enabled;
     if (!enabled)
-      this.hideTooltip();
+      this.hideTooltip(true);
   }
 
-  showTooltip(el, event) {
+  showTooltip(el, event, contentOverride = null, options = {}) {
     if (!tooltip.enabled) return;
+    if (this.isPersistent && !options.persistent) return;
 
     this.tooltipEl = el;
-    this.tooltip.innerHTML = this.getContent(el);
+    this.tooltip.innerHTML = contentOverride || this.getContent(el);
+
+    if (options.persistent) {
+      this.isPersistent = true;
+      this.tooltip.style.pointerEvents = "auto";
+      // Close when clicking outside
+      setTimeout(() => {
+        this.persistentCloseHandler = (e) => {
+          if (this.tooltip.contains(e.target)) return;
+
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          e.preventDefault();
+
+          this.hideTooltip(true);
+        };
+        document.addEventListener("click", this.persistentCloseHandler, { capture: true });
+      }, 0);
+    }
 
     const margin = 12;
     const elRect = el.getBoundingClientRect();
@@ -1520,10 +1553,19 @@ class Tooltip {
     }
   }
 
-  hideTooltip() {
+  hideTooltip(force = false) {
+    if (this.isPersistent && !force) return;
+
+    if (this.persistentCloseHandler) {
+      document.removeEventListener("click", this.persistentCloseHandler, { capture: true });
+      this.persistentCloseHandler = null;
+    }
+
     this.tooltip.style.opacity = "0";
     this.tooltipVisible = false;
     this.tooltipEl = null;
+    this.isPersistent = false;
+    this.tooltip.style.pointerEvents = "none";
   }
 
   attachEvents() {
@@ -1543,7 +1585,7 @@ class Tooltip {
       if (this.showTimer)
         clearTimeout(this.showTimer);
       this.showTimer = setTimeout(() => {
-        if (this.hoverEl === el)
+        if (this.hoverEl === el && !this.isPersistent)
           this.showTooltip(el, e);
       }, delay);
     });
@@ -1592,6 +1634,48 @@ function renderItemTooltip(item) {
   </table>`;
 }
 
+async function showVideoInfo(item, anchorEl) {
+  try {
+    const res = await fetch("/api/video_info?path=" + encodeURIComponent(item._key));
+    if (!res.ok) throw new Error("Failed to fetch info");
+    const info = await res.json();
+
+    if (info.error) throw new Error(info.error);
+
+    const html = renderExtendedInfo(item, info);
+
+    const rect = anchorEl.getBoundingClientRect();
+    const event = {
+      clientX: rect.right,
+      clientY: rect.top
+    };
+
+    const thumbEl = grid.thumbMap.get(item._key);
+    tooltip.showTooltip(thumbEl, event, html, { persistent: true });
+
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function renderExtendedInfo(item, info) {
+  const itemName = decodeOsPathForDisplay(item.name);
+
+  return `<table>
+    <tr><td class="label">Name:</td><td class="value wrap">${itemName}</td></tr>
+    <tr><td class="label">Size:</td><td class="value">${formatBytes(info.size)}</td></tr>
+    <tr><td class="label">Duration:</td><td class="value">${formatDuration(info.duration)}</td></tr>
+    <tr><td class="label">Video codec:</td><td class="value">${info.video.codec}</td></tr>
+    <tr><td class="label">Resolution:</td><td class="value">${info.video.width}x${info.video.height}</td></tr>
+    <tr><td class="label">Frame Rate:</td><td class="value">${info.video.frame_rate}</td></tr>
+    <tr><td class="label">Bitrate:</td><td class="value">${formatBitrate(info.video.bitrate)}</td></tr>
+    <tr><td class="label">Audio codec:</td><td class="value">${info.audio.codec}</td></tr>
+    <tr><td class="label">Channels:</td><td class="value">${info.audio.channels}</td></tr>
+    <tr><td class="label">Sample Rate:</td><td class="value">${info.audio.sample_rate} Hz</td></tr>
+    <tr><td class="label">Bitrate:</td><td class="value">${formatBitrate(info.audio.bitrate)}</td></tr>
+  </table>`;
+}
+
 function formatBytes(bytes) {
   if (!bytes) return "0 B";
   if (bytes < 1024) return bytes + " B";
@@ -1601,6 +1685,23 @@ function formatBytes(bytes) {
   if (mb < 1024) return mb.toFixed(1) + " MB";
   let gb = mb / 1024;
   return gb.toFixed(1) + " GB";
+}
+
+function formatDuration(sec) {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  return `${m}m ${s}s`;
+}
+
+function formatBitrate(bps) {
+  if (!bps) return "-";
+  if (bps < 1000) return bps + " bps";
+  const kbps = bps / 1000;
+  if (kbps < 1000) return Math.round(kbps) + " Kbps";
+  const mbps = kbps / 1000;
+  return mbps.toFixed(1) + " Mbps";
 }
 
 function formatDateTime(dateInput) {
