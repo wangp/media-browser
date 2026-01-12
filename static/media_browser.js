@@ -1020,6 +1020,18 @@ class Grid {
       const item = img.parentElement.item;
       if (item) viewer.openItem(item, this.visibleItems);
     });
+
+    this.gridEl.addEventListener("auxclick", e => {
+      if (e.button !== 1) return; // middle click only
+
+      const img = e.target.closest(".thumb-img-placeholder img");
+      if (!img) return;
+
+      const item = img.parentElement.item;
+      if (item) {
+        window.open("/api/file?path=" + encodeURIComponent(item._key), "_blank");
+      }
+    });
   }
 }
 
