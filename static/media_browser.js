@@ -1228,6 +1228,8 @@ class ContextMenu {
 
     // actionName -> handler(selectedItem, clickedEl)
     this.actions = {};
+    // actionName -> condition(selectedItem) => boolean
+    this.conditions = {};
 
     // message element
     this.msgEl = document.createElement("li");
@@ -1239,13 +1241,16 @@ class ContextMenu {
     this._bindEvents();
   }
 
-  addItem(label, action, handler) {
+  addItem(label, action, handler, condition = null) {
     const li = document.createElement("li");
     li.className = "menu-item";
     li.dataset.action = action;
     li.textContent = label;
     this.menu.insertBefore(li, this.msgEl);
     this.actions[action] = handler;
+    if (condition) {
+      this.conditions[action] = condition;
+    }
   }
 
   isActive() {
@@ -1260,6 +1265,18 @@ class ContextMenu {
     this.menu.style.top = `${y}px`;
     this.menu.classList.remove("show-msg");
     this.menu.classList.add("show-items");
+
+    // Toggle items based on conditions
+    for (const li of this.menu.querySelectorAll("li.menu-item")) {
+      const action = li.dataset.action;
+      const condition = this.conditions[action];
+      if (condition) {
+        const visible = condition(this.selectedItem);
+        li.style.display = visible ? "" : "none";
+      } else {
+        li.style.display = "";
+      }
+    }
   }
 
   hide() {
@@ -1351,6 +1368,18 @@ contextMenu.addItem("Go to directory", "goto-dir", async (thumbEl, clickedEl) =>
   openAndLoadDir(item._dir, { highlightItem: item });
   contextMenu.hide();
 });
+
+contextMenu.addItem("Play HLS stream", "play-hls",
+  async (thumbEl, clickedEl) => {
+    const item = thumbEl._item;
+    if (!item || item.type !== "video") return;
+
+    viewer.openItem(item, grid.visibleItems, true);
+    contextMenu.hide();
+  },
+  (thumbEl) => {
+    return thumbEl._item?.type === "video";
+  });
 
 async function copyToClipboard(text) {
   if (navigator.clipboard?.writeText) {
@@ -1659,7 +1688,7 @@ class Viewer {
     return this.viewerEl.style.display === "block";
   }
 
-  openItem(item, navItems) {
+  openItem(item, navItems, forceHls = false) {
     const idx = navItems.findIndex(vi => vi._key === item._key);
     if (idx === -1) {
       console.warn("Item not in navItems:", item);
@@ -1689,7 +1718,7 @@ class Viewer {
 
     this.viewerEl.style.display = "block";
     this.hideViewerControls();
-    this.showItem(this.navItems[this.navIndex]);
+    this.showItem(this.navItems[this.navIndex], forceHls);
 
     this.wheelAccum = 0;
   }
@@ -1735,7 +1764,7 @@ class Viewer {
 
   // ---------------- Item Display ----------------
 
-  async showItem(item) {
+  async showItem(item, forceHls = false) {
     this.disarmAutoAdvance();
 
     this.viewerTitleEl.textContent = decodeOsPathForDisplay(item.name);
@@ -1751,7 +1780,7 @@ class Viewer {
     }
 
     if (item.type === "video") {
-      await this.showVideoItem(item);
+      await this.showVideoItem(item, forceHls);
     } else {
       this.showImageItem(item);
     }
@@ -1770,7 +1799,7 @@ class Viewer {
     this.viewerImg.src = `/api/file?path=${encodeURIComponent(item._key)}`;
   }
 
-  async showVideoItem(item) {
+  async showVideoItem(item, forceHls = false) {
     this.viewerImg.style.display = "none";
     this.viewerVideo.style.display = "block";
 
@@ -1780,7 +1809,7 @@ class Viewer {
     let hlsPlayback = false;
     let schedAdvanceAfterError = false;
 
-    if (commonExts.includes(ext)) {
+    if (!forceHls && commonExts.includes(ext)) {
       try {
         this.viewerVideo.src = `/api/file?path=${encodeURIComponent(item._key)}`;
         await this.viewerVideo.play();
