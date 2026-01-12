@@ -59,7 +59,7 @@ function decodeOsPathForDisplay(s) {
   s = s.slice(OSPATH_PREFIX.length);
   let out = "";
 
-  for (let i = 0; i < s.length; ) {
+  for (let i = 0; i < s.length;) {
     if (s[i] === "~") {
       const byte = parseInt(s.slice(i + 1, i + 3), 16);
       // ASCII bytes can be shown, non-ASCII become replacement char
@@ -650,14 +650,14 @@ function sortItems(items) {
   let cmp;
   switch (sortType) {
     case "name":
-      cmp = function(a, b) {
+      cmp = function (a, b) {
         // could also ignore case
         return gt * laxCompareOsPath(a.name, b.name);
       };
       break;
     case "mtime":
     case "size":
-      cmp = function(a, b) {
+      cmp = function (a, b) {
         const va = a[sortType];
         const vb = b[sortType];
 
@@ -1057,7 +1057,7 @@ function thumbObserverCallback(entries, observer) {
 }
 
 const thumbObserver = new IntersectionObserver(thumbObserverCallback,
-  {root: gridEl, rootMargin: "200px"});
+  { root: gridEl, rootMargin: "200px" });
 const grid = new Grid(gridEl, fileCountSpan, thumbObserver);
 
 // ---------------- Thumbnail Zoom ----------------
@@ -1158,7 +1158,7 @@ function handleThumbFilterInput({ scroll = true }) {
 }
 
 thumbFilterInput.addEventListener("input", () => {
-  if (!filterTimeout)  {
+  if (!filterTimeout) {
     handleThumbFilterInput({ scroll: true });
   }
 
@@ -1177,7 +1177,7 @@ thumbFilterInput.addEventListener("keydown", e => {
       break;
     case "Escape":
       thumbFilterInput.value = "";
-      handleThumbFilterInput({ scroll: false});
+      handleThumbFilterInput({ scroll: false });
       break;
   }
 });
@@ -1723,8 +1723,8 @@ function formatDateTime(dateInput) {
     : new Date(dateInput);
 
   const pad = n => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ` +
-         `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 // ---------------- Viewer ----------------
