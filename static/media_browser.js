@@ -1757,6 +1757,7 @@ class Viewer {
     this.currentHls = null;
     this.viewerControlsVisible = false;
     this.viewerFullscreenEntered = false;
+    this.isHoveringControls = false;
     this.toastTimer = null;
 
     // Mouse tracking
@@ -2020,8 +2021,7 @@ class Viewer {
 
     if (showUI) {
       this.showViewerControls();
-      clearTimeout(this.hideTimer);
-      this.hideTimer = setTimeout(() => this.hideViewerControls(), 1000);
+      this.resetHideTimer();
     }
 
     if (this.viewerControlsVisible) {
@@ -2105,10 +2105,18 @@ class Viewer {
   }
 
   hideViewerControls() {
+    if (this.isHoveringControls) return;
     clearTimeout(this.hideTimer);
     this.viewerControlsVisible = false;
     this.viewerEl.querySelectorAll(".viewer-control")
       .forEach(el => el.classList.remove("show"));
+  }
+
+  resetHideTimer(delay = 1000) {
+    clearTimeout(this.hideTimer);
+    if (!this.isHoveringControls) {
+      this.hideTimer = setTimeout(() => this.hideViewerControls(), delay);
+    }
   }
 
   toggleAutoAdvance() {
@@ -2205,6 +2213,27 @@ class Viewer {
     this.autoAdvanceBtn.addEventListener("click", () => this.toggleAutoAdvance());
     this.shuffleBtn.addEventListener("click", () => this.toggleShuffle());
     this.fullscreenBtn.addEventListener("click", () => this.toggleFullscreen());
+
+    // Hover detection for controls
+    this.viewerEl.querySelectorAll(".viewer-control").forEach(el => {
+      el.addEventListener("mouseenter", () => {
+        this.isHoveringControls = true;
+        this.showViewerControls();
+        clearTimeout(this.hideTimer);
+      });
+      el.addEventListener("mouseleave", () => {
+        this.isHoveringControls = false;
+        this.resetHideTimer();
+      });
+    });
+
+    // Faster hide when mouse leaves the window entirely
+    document.addEventListener("mouseleave", () => {
+      if (this.isActive()) {
+        this.isHoveringControls = false;
+        this.resetHideTimer(200);
+      }
+    });
 
     // Keyboard
     document.addEventListener("keydown", e => this.handleKeyDown(e));
@@ -2340,9 +2369,7 @@ class Viewer {
       if (!this.viewerControlsVisible)
         this.showViewerControls();
 
-      clearTimeout(this.hideTimer);
-      this.hideTimer = setTimeout(() => this.hideViewerControls(), 1000);
-
+      this.resetHideTimer();
       this.mousemoveAccum = 0;
     }
   }
