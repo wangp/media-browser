@@ -367,7 +367,7 @@ const treeDataModel = new TreeData();
 // Select the given path and load the items into the grid.
 // If 'changeRecursiveMode' then assume the item list can change, even if the
 // path hasn't.
-async function loadDir(newPath, { refresh = false, changeRecursiveMode = false } = {}) {
+async function loadDir(newPath, { refresh = false, changeRecursiveMode = false, fromHistory = false } = {}) {
   const newItems = await treeDataModel.buildItems(newPath, { recursive, refresh });
 
   let applyNewItems = changeRecursiveMode;
@@ -376,6 +376,14 @@ async function loadDir(newPath, { refresh = false, changeRecursiveMode = false }
     currentPath = newPath;
     grid.resetOpenGroups();
     updateBreadcrumbs(currentPath);
+
+    if (!fromHistory) {
+      historyManager.pushState({
+        path: currentPath,
+        viewerOpen: false
+      });
+    }
+    updateTitle(currentPath);
   }
 
   if (applyNewItems) {
@@ -1386,7 +1394,7 @@ contextMenu.addItem("Play HLS stream", "play-hls",
     const item = thumbEl._item;
     if (!item || item.type !== "video") return;
 
-    viewer.openItem(item, grid.visibleItems, true);
+    viewer.openItem(item, grid.visibleItems, { forceHls: true });
     contextMenu.hide();
   },
   (thumbEl) => {
@@ -1802,7 +1810,9 @@ class Viewer {
     return this.viewerEl.style.display === "block";
   }
 
-  openItem(item, navItems, forceHls = false) {
+  openItem(item, navItems, { forceHls = false,
+                              fromHistory = false,
+                              shuffleOrder = null } = {}) {
     const idx = navItems.findIndex(vi => vi._key === item._key);
     if (idx === -1) {
       console.warn("Item not in navItems:", item);
@@ -1824,20 +1834,34 @@ class Viewer {
       this.navRightEl.style.display = "";
     }
 
-    if (this.shuffleEnabled) {
-      this.makeShuffleOrder(this.navIndex);
+    if (shuffleOrder) {
+      // Restore from history.
+      this.shuffleOrder = shuffleOrder;
     } else {
-      this.shuffleOrder = null;
+      this.shuffleOrder = this.makeShuffleOrder(this.navIndex);
+    }
+
+    if (!fromHistory) {
+      // This state will be replaced by showItem immediately.
+      historyManager.pushState({ dummy: true });
     }
 
     this.viewerEl.style.display = "block";
     this.hideViewerControls();
-    this.showItem(this.navItems[this.navIndex], forceHls);
+    this.showItem(this.navItems[this.navIndex], { forceHls, fromHistory });
 
     this.wheelAccum = 0;
   }
 
   close() {
+    if (history.state) {
+      history.back();
+    } else {
+      this._reallyClose();
+    }
+  }
+
+  _reallyClose() {
     this.disarmAutoAdvance();
     this.autoAdvanceActive = false;
     this.autoAdvanceBtn.classList.remove("active");
@@ -1874,11 +1898,12 @@ class Viewer {
       tooltip.setEnabled(true);
 
     grid.highlightThumbForItem(this.navItems[this.navIndex]);
+    updateTitle(currentPath);
   }
 
   // ---------------- Item Display ----------------
 
-  async showItem(item, forceHls = false) {
+  async showItem(item, { forceHls = false, fromHistory = false } = {}) {
     this.disarmAutoAdvance();
 
     this.viewerTitleEl.textContent = decodeOsPathForDisplay(item.name);
@@ -1898,6 +1923,17 @@ class Viewer {
     } else {
       this.showImageItem(item);
     }
+
+    // Update history state to the current item
+    if (!fromHistory) {
+      historyManager.replaceState({
+        path: currentPath,
+        viewerOpen: true,
+        itemKey: item._key,
+        shuffleOrder: this.shuffleOrder
+      });
+    }
+    updateTitle(currentPath, item.name);
 
     if (this.autoAdvanceActive)
       this.armAutoAdvance();
@@ -1987,19 +2023,21 @@ class Viewer {
   }
 
   makeShuffleOrder(anchorIdx) {
-    this.shuffleOrder = this.navItems.map((_, i) => i);
+    let shuffleOrder = this.navItems.map((_, i) => i);
 
     // Remove anchor and put it first
     if (anchorIdx >= 0 && anchorIdx < this.navItems.length) {
-      this.shuffleOrder.splice(this.shuffleOrder.indexOf(anchorIdx), 1);
-      this.shuffleOrder.unshift(anchorIdx);
+      shuffleOrder.splice(shuffleOrder.indexOf(anchorIdx), 1);
+      shuffleOrder.unshift(anchorIdx);
     }
 
     // Fisher–Yates shuffle starting from index 1 to keep anchor first
-    for (let i = 1; i < this.shuffleOrder.length; i++) {
-      const j = i + Math.floor(Math.random() * (this.shuffleOrder.length - i));
-      [this.shuffleOrder[i], this.shuffleOrder[j]] = [this.shuffleOrder[j], this.shuffleOrder[i]];
+    for (let i = 1; i < shuffleOrder.length; i++) {
+      const j = i + Math.floor(Math.random() * (shuffleOrder.length - i));
+      [shuffleOrder[i], shuffleOrder[j]] = [shuffleOrder[j], shuffleOrder[i]];
     }
+
+    return shuffleOrder;
   }
 
   viewerNav(delta) {
@@ -2743,6 +2781,82 @@ class Viewer {
 }
 
 const viewer = new Viewer();
+
+// ---------------- History ----------------
+
+class HistoryManager {
+  constructor() {
+    this.isHandlingPopState = false;
+  }
+
+  pushState(state) {
+    history.pushState(state, "");
+  }
+
+  replaceState(state) {
+    history.replaceState(state, "");
+  }
+
+  async handlePopState(e) {
+    const state = e.state;
+    if (!state) return;
+
+    // Re-entrancy protection
+    if (this.isHandlingPopState) return;
+    this.isHandlingPopState = true;
+    try {
+      this._handlePopState(state);
+    } finally {
+      this.isHandlingPopState = false;
+    }
+  }
+
+  async _handlePopState(state) {
+    // Do we need this?
+    const node = treeDataModel.findNode(state.path);
+    if (!node) {
+      console.warn("Path no longer exists:", state.path);
+      return;
+    }
+
+    await loadDir(state.path, { fromHistory: true });
+    dirTree.openAndHighlightDir(state.path, false);
+
+    let item = null;
+    if (state.viewerOpen) {
+      item = allItems.find(it => it._key === state.itemKey);
+    }
+    if (item) {
+      viewer.openItem(item, grid.visibleItems, {
+        fromHistory: true,
+        shuffleOrder: state.shuffleOrder
+      });
+    } else {
+      if (viewer.isActive())
+        viewer._reallyClose();
+      updateTitle(currentPath);
+    }
+  }
+}
+
+const historyManager = new HistoryManager();
+
+window.addEventListener("popstate", (e) => historyManager.handlePopState(e));
+
+function updateTitle(path, itemName = null) {
+  document.title = formatTitle(path, itemName);
+}
+
+function formatTitle(path, itemName) {
+  if (itemName) {
+    return `${decodeOsPathForDisplay(itemName)} - Media Browser`;
+  }
+  const base = basename(decodeOsPathForDisplay(path));
+  if (base === "." || base === "") {
+    return "Media Browser";
+  }
+  return `${base} - Media Browser`;
+}
 
 // ---------------- Window ----------------
 
